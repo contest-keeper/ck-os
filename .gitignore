@@ -5,6 +5,11 @@
 *.img
 *.iso
 *.vdi
+*.vhd
+*.vhdx
+*.qcow2
+*.fd
+*.jsonl
 .DS_Store
 Thumbs.db
 .idea/
@@ -12,5 +17,10 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json
 .claude/settings.local.json
-/target/
+target/
+dist/
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
 **/*.rs.bk
