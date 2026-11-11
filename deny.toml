@@ -21,3 +21,4 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-org = { github = ["contest-keeper"] }
