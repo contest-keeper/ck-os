@@ -13,3 +13,11 @@ jobs:
     uses: contest-keeper/.github/.github/workflows/pr-title.yml@main
   common:
     uses: contest-keeper/.github/.github/workflows/common-ci.yml@main
+  patch-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run image patch regression tests
+        run: python3 -m unittest discover -s tests -v

@@ -1,0 +1,24 @@
+[Unit]
+Description=Keeper OS: contest screen recording (mode set by the admin tool)
+After=display-manager.service
+
+[Service]
+ExecStart=/usr/local/bin/ck-recorder
+# Mode "off" exits 0 and stays stopped; crashes are restarted.
+Restart=on-failure
+RestartSec=10
+# Never compete with the contestant: lowest CPU and disk priority, at most half a core.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+CPUQuota=50%
+# It needs root and the X display, so it cannot be fully sandboxed. It may write only
+# to its own recordings folder (created root-only by systemd).
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+StateDirectory=ck/recordings
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=graphical.target

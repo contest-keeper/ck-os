@@ -22,17 +22,37 @@ types and utilities live in [ck-protocol](https://github.com/contest-keeper/ck-p
 
 ## Build and run
 
-Keeper OS is in early development. This repository does not yet contain a
-buildable agent or a runnable image patch. Build and installation instructions
-will be added with those components.
+Keeper OS is in early development. `image/patch/` contains the reference patch
+from the initial prototype: screen recording and boot fixes. It does not include
+the agent, so it is not a complete Keeper OS installation. Until the Rust agent
+exists, the recorder runs with its built-in defaults.
+
+The recorder service is `ck-recorder`, with settings under `/etc/ck/`. It runs
+from `/usr/local/bin/ck-recorder` and stores recordings in `/var/lib/ck/recordings/`.
+Legacy recorder names appear only in the lists that disable the base image's old
+service and remove its leftover recordings.
+
+The Rust agent, its `ck-config` and `ck-uplink` services, and supported build and
+installation instructions will be added as development progresses.
 
 Base images and virtual machine disks are not distributed in this repository.
 
 ## Testing
 
-Runtime tests are not available yet. Planned verification includes Rust unit and
-integration tests, image checks, virtual machine boot tests, and checks on real
-contest hardware.
+The imported shell scripts are checked with Bash syntax validation and ShellCheck.
+On Linux or WSL, run the patch regression tests from the repository root:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The tests use Python's standard library and simulated filesystem tools; they do
+not modify a real image. The patch steps are in `image/patch/apply-to-image.sh`,
+with low-level filesystem helpers in `image/patch/lib/image-tools.sh`.
+
+The reference patch has not been validated as a complete Keeper OS image.
+Planned verification includes Rust unit and integration tests, image checks,
+virtual machine boot tests, and checks on real contest hardware.
 
 ## Contributing
 
