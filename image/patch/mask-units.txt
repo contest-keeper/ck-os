@@ -1,0 +1,44 @@
+# Services a contest machine doesn't need. Each is masked (linked to /dev/null) and removed from
+# every *.wants folder, so nothing can start it. One unit per line; '#' starts a comment.
+
+# Disable the base image's recorder; ck-recorder.service replaces it.
+icpc-screen-record.service
+
+# Automatic updates and update notifications (unexpected network and disk use mid-contest)
+unattended-upgrades.service
+apt-daily.timer
+apt-daily-upgrade.timer
+update-notifier-download.timer
+update-notifier-motd.timer
+motd-news.timer
+ua-timer.timer
+ubuntu-advantage.service
+ua-reboot-cmds.service
+pollinate.service
+lxd-installer.socket
+
+# Firmware updates
+fwupd.service
+fwupd-refresh.timer
+
+# Performance Co-Pilot monitoring suite
+pmcd.service
+pmie.service
+pmlogger.service
+pmproxy.service
+
+# Crash reporting
+apport.service
+apport-autoreport.timer
+apport-autoreport.path
+apport-forward.socket
+
+# Mobile modems, SAN/multipath, LVM and iSCSI (the image uses plain partitions)
+ModemManager.service
+multipathd.service
+multipathd.socket
+lvm2-monitor.service
+lvm2-lvmpolld.socket
+dm-event.socket
+open-iscsi.service
+iscsid.socket

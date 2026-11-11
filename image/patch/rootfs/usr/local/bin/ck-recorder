@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Contest Keeper: Screen recording for review after the contest.
+#
+# Settings come from /etc/ck/recording.conf, which ck-config writes at boot from the
+# admin tool's settings. Modes:
+#   off        - no recording
+#   snapshots  - one JPEG every SNAPSHOT_INTERVAL seconds (cheapest)
+#   low        - 1 fps, half resolution, x264 ultrafast (default)
+#   standard   - 2 fps, full resolution, x264 veryfast (the original behaviour)
+#
+# Runs as root from ck-recorder.service at idle CPU/IO priority, so it never competes with
+# the contestant. Files go to a root-only folder. It waits START_DELAY seconds after the desktop
+# appears (and until START_AT, if set) so it does not slow down the boot and login.
+# It stops writing when free space drops below MIN_FREE_MB, so it can never fill the disk.
+#
+# Collect after the contest:  sudo ls -lh /var/lib/ck/recordings
+
+CONF=/etc/ck/recording.conf
+MODE=low
+START_DELAY=60
+START_AT=""
+SNAPSHOT_INTERVAL=10
+OUT=/var/lib/ck/recordings
+SEGMENT=600 # seconds per file
+MIN_FREE_MB=1500
+DISPLAY_NAME=:0
+# The contest image supplies this configuration at runtime.
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+case "$MODE" in
+  off)
+    echo "screen-record: disabled by settings"
+    exit 0
+    ;;
+  snapshots)
+    SCALE=${SCALE:-0.75}
+    QUALITY=${QUALITY:-7}
+    ;;
+  low)
+    FPS=${FPS:-1}
+    SCALE=${SCALE:-0.5}
+    PRESET=${PRESET:-ultrafast}
+    CRF=${CRF:-32}
+    ;;
+  standard)
+    FPS=${FPS:-2}
+    SCALE=${SCALE:-1}
+    PRESET=${PRESET:-veryfast}
+    CRF=${CRF:-30}
+    ;;
+  *)
+    echo "screen-record: unknown MODE=$MODE, using low" >&2
+    MODE=low
+    FPS=1
+    SCALE=0.5
+    PRESET=ultrafast
+    CRF=32
+    ;;
+esac
+
+mkdir -p "$OUT"
+chmod 700 "$OUT"
+export DISPLAY=$DISPLAY_NAME
+
+find_xauth() {
+  # The X server's auth file: whatever Xorg was started with (-auth), else LightDM's usual place
+  local a c
+  # Extract the auth path from the full Xorg command line, not just a process ID.
+  # shellcheck disable=SC2009
+  a=$(ps -C Xorg,X -o args= 2>/dev/null | grep -o -- '-auth [^ ]*' | head -1 | cut -d' ' -f2)
+  for c in "$a" /var/run/lightdm/root/$DISPLAY_NAME /run/lightdm/root/$DISPLAY_NAME; do
+    if [ -n "$c" ] && [ -r "$c" ]; then
+      export XAUTHORITY=$c
+      return
+    fi
+  done
+}
+
+wait_for_desktop() {
+  while true; do
+    find_xauth
+    size=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2; exit}')
+    [ -n "$size" ] && return
+    sleep 5
+  done
+}
+
+wait_for_desktop
+echo "screen-record: desktop is up, mode=$MODE, starting in ${START_DELAY}s"
+sleep "$START_DELAY"
+if [ -n "$START_AT" ]; then
+  t=$(date -d "$START_AT" +%s 2>/dev/null) && now=$(date +%s)
+  if [ -n "$t" ] && [ "$t" -gt "$now" ]; then
+    echo "screen-record: waiting until $START_AT"
+    sleep $((t - now))
+  fi
+fi
+
+SCALE_F="scale=trunc(iw*${SCALE}/2)*2:trunc(ih*${SCALE}/2)*2"
+
+while true; do
+  wait_for_desktop
+
+  free=$(df -Pm "$OUT" | awk 'NR==2{print $4}')
+  if [ "${free:-0}" -lt "$MIN_FREE_MB" ]; then
+    echo "screen-record: only ${free}MB free, not recording" >&2
+    sleep 60
+    continue
+  fi
+
+  # A resolution change (e.g. a projector plugged in) ends the file; the loop starts a new one.
+  if [ "$MODE" = snapshots ]; then
+    mkdir -p "$OUT/snapshots"
+    ffmpeg -hide_banner -loglevel error -nostdin \
+      -f x11grab -framerate "1/$SNAPSHOT_INTERVAL" -video_size "$size" -draw_mouse 1 -i "$DISPLAY_NAME" \
+      -t "$SEGMENT" -vf "$SCALE_F" -q:v "$QUALITY" \
+      -f image2 -strftime 1 "$OUT/snapshots/%Y%m%d-%H%M%S.jpg" || sleep 5
+  else
+    f="$OUT/screen-$(date +%Y%m%d-%H%M%S).mkv"
+    ffmpeg -hide_banner -loglevel error -nostdin \
+      -f x11grab -framerate "$FPS" -video_size "$size" -draw_mouse 1 -i "$DISPLAY_NAME" \
+      -t "$SEGMENT" -vf "$SCALE_F" \
+      -c:v libx264 -preset "$PRESET" -tune stillimage -crf "$CRF" -threads 1 -pix_fmt yuv420p \
+      -g $((FPS * 10)) "$f" || sleep 5
+  fi
+done
