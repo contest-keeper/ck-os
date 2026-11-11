@@ -1,0 +1,2 @@
+# Follow "source" lines so ShellCheck also reads the sourced helper files.
+external-sources=true
