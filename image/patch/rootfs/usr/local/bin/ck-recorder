@@ -8,10 +8,7 @@
 #   low        - 1 fps, half resolution, x264 ultrafast (default)
 #   standard   - 2 fps, full resolution, x264 veryfast (the original behaviour)
 #
-# Runs as root from ck-recorder.service at idle CPU/IO priority, so it never competes with
-# the contestant. Files go to a root-only folder. It waits START_DELAY seconds after the desktop
-# appears (and until START_AT, if set) so it does not slow down the boot and login.
-# It stops writing when free space drops below MIN_FREE_MB, so it can never fill the disk.
+# Files go to a root-only folder. It stops writing below MIN_FREE_MB free space, so it never fills the disk.
 #
 # Collect after the contest:  sudo ls -lh /var/lib/ck/recordings
 

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Filesystem helpers for apply-to-image.sh. Source this file; do not run it directly.
-# COMMANDS blocks contain the actual debugfs instructions added to the patch plan.
-# In those blocks, "sif" sets file metadata such as owner, group and permissions.
 
 find_linux_partition() {
   local image_file=$1
@@ -41,14 +39,12 @@ list_payload_paths() {
   local file_type=$2
   (
     cd "$payload_directory" || exit 1
-    # Paths are relative to the image root, for example /etc/ck/image-version.
     find . -mindepth 1 -type "$file_type" -printf '/%P\n' | sort
   )
 }
 
 read_manifest() {
   local manifest_file=$1
-  # Remove Windows line endings, comments, trailing spaces, then blank lines.
   sed \
     -e 's/\r$//' \
     -e 's/#.*//' \
@@ -59,7 +55,6 @@ read_manifest() {
 image_path_exists() {
   local filesystem=$1
   local image_path=$2
-  # debugfs reports an inode when the requested image path exists.
   debugfs -R "stat $image_path" "$filesystem" 2>/dev/null | grep -q '^Inode:'
 }
 
@@ -107,7 +102,6 @@ COMMANDS
 
 payload_file_mode() {
   local image_path=$1
-  # Mode 0644 allows only the owner to write; 0755 also allows execution.
   case "$image_path" in
     /usr/local/bin/ck-recorder)
       printf '0100755\n'
@@ -144,7 +138,6 @@ queue_disabled_service() {
   local service_name=$1
   local commands_file=$2
   local wants_directory
-  # Each folder contains links that start services for a particular boot stage.
   local wants_directories=(
     multi-user.target.wants
     graphical.target.wants
@@ -192,9 +185,7 @@ queue_efi_permissions() {
   local fstab_file="$work_directory/fstab"
   debugfs -R "dump /etc/fstab $fstab_file" "$filesystem" 2>/dev/null
 
-  # Match the EFI mount entry and replace its default permissions with umask=0077.
-  # The capture group preserves the mount path, filesystem type and spacing.
-  # This makes the EFI settings and stick key readable only by root.
+  # Make the EFI partition, which holds the settings and the stick key, root-only.
   sed -i 's#\(/boot/efi[[:space:]]\+vfat[[:space:]]\+\)defaults#\1umask=0077#' "$fstab_file"
   if grep -q '/boot/efi.*umask=0077' "$fstab_file"; then
     queue_image_file "$fstab_file" /etc/fstab 0100644 "$commands_file"
@@ -226,7 +217,6 @@ verify_payload() {
 
   while IFS= read -r image_path; do
     source_file="$payload_directory$image_path"
-    # Compare the file read from the image with the local file we installed.
     if ! cmp -s <(debugfs -R "cat $image_path" "$filesystem" 2>/dev/null) "$source_file"; then
       echo "MISMATCH $image_path"
       verification_failed=1
