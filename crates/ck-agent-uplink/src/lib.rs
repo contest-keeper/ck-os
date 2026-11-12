@@ -22,6 +22,8 @@ use ck_protocol::{
 const CONFIG_COPY: &str = "etc/ck/config.json";
 /// Where events go. The Hub answers 409 for one it already has, which counts as sent.
 pub const EVENTS_PATH: &str = "/api/v1/events";
+/// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
+const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
 /// How long one heartbeat may take. A slow network must not make the next one late.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -76,11 +78,15 @@ impl Uplink {
             let text: Vec<String> = problems.iter().map(ToString::to_string).collect();
             return Err(Error::BadSettings(text.join("; ")));
         }
+        let boot_id = read_trimmed(root, "proc/sys/kernel/random/boot_id").unwrap_or_default();
+        // A restart of the service in the middle of a boot carries on the sequence. Starting again
+        // at 1 would make the Hub refuse every heartbeat until it passed the old number.
+        let seq = saved_sequence(root, &boot_id);
         Ok(Self {
             root: root.to_path_buf(),
             config,
-            boot_id: read_trimmed(root, "proc/sys/kernel/random/boot_id").unwrap_or_default(),
-            seq: 0,
+            boot_id,
+            seq,
         })
     }
 
@@ -105,6 +111,9 @@ impl Uplink {
     /// so the Hub can see when a message was lost.
     pub fn next_heartbeat(&mut self, now: DateTime<Utc>, recorder: RecorderState) -> Heartbeat {
         self.seq += 1;
+        if let Err(error) = save_sequence(&self.root, &self.boot_id, self.seq) {
+            tracing::warn!("the heartbeat sequence cannot be kept: {error}");
+        }
         let settings = &self.config.settings;
         Heartbeat {
             stick_id: self.config.stick_id.clone(),
@@ -225,4 +234,34 @@ fn uptime_seconds(root: &Path) -> u64 {
                 .ok()
         })
         .unwrap_or(0)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedSequence {
+    boot_id: String,
+    seq: u64,
+}
+
+/// The last sequence sent in this boot, or 0 when there is none: a new boot starts at 1.
+fn saved_sequence(root: &Path, boot_id: &str) -> u64 {
+    fs::read(root.join(SEQUENCE_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SavedSequence>(&bytes).ok())
+        .filter(|saved| saved.boot_id == boot_id)
+        .map_or(0, |saved| saved.seq)
+}
+
+fn save_sequence(root: &Path, boot_id: &str, seq: u64) -> Result<(), Error> {
+    let path = root.join(SEQUENCE_FILE);
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder).map_err(|e| Error::Queue(e.to_string()))?;
+    }
+    let saved = SavedSequence {
+        boot_id: boot_id.to_owned(),
+        seq,
+    };
+    queue::write_atomically(
+        &path,
+        &serde_json::to_vec(&saved).expect("a sequence serializes"),
+    )
 }

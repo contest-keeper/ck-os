@@ -166,7 +166,7 @@ fn queue_error(what: &str, error: &std::io::Error) -> Error {
     Error::Queue(format!("{what}: {error}"))
 }
 
-fn write_atomically(path: &Path, content: &[u8]) -> Result<(), Error> {
+pub(crate) fn write_atomically(path: &Path, content: &[u8]) -> Result<(), Error> {
     let temporary = path.with_extension("tmp");
     let result = (|| -> std::io::Result<()> {
         let mut file: File = OpenOptions::new()
