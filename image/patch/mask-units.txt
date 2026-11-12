@@ -39,3 +39,6 @@ lvm2-lvmpolld.socket
 dm-event.socket
 open-iscsi.service
 iscsid.socket
+
+# The contest's own screen recorder, replaced by ck-recorder
+icpc-screen-record.service

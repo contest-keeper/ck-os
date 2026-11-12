@@ -1,0 +1,17 @@
+[Unit]
+Description=Keeper OS: apply the admin's settings
+# The settings are on the EFI partition, so wait for it. Squid reads its allowlist at start, the
+# recorder reads its settings at start and the desktop shows the names, so all of them must wait.
+RequiresMountsFor=/boot/efi
+Before=squid.service display-manager.service ck-recorder.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/ck-agent apply-config
+# Exit code 3 means there are no settings, so the image keeps its defaults. That is a normal
+# state for a stick that was never configured, not a failure.
+SuccessExitStatus=3
+
+[Install]
+WantedBy=multi-user.target

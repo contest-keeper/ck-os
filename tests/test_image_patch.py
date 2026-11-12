@@ -65,7 +65,7 @@ elif tool == "debugfs":
                     state[table].pop(absolute(parts[1]), None)
             elif parts[0] == "write":
                 path = absolute(parts[2])
-                state["files"][path] = Path(parts[1]).read_text()
+                state["files"][path] = Path(parts[1]).read_bytes().decode("latin-1")
                 # A rewritten file is a new inode without the old mode and owner.
                 state["modes"].pop(path, None)
                 state["owners"].pop(path, None)
@@ -102,7 +102,7 @@ elif tool == "debugfs":
                 content = FSTAB  # The image's original fstab, if the patch did not replace it.
             if os.environ.get("CORRUPT_FILE") == parts[1]:
                 content = "corrupted file\n"
-            sys.stdout.write(content)
+            sys.stdout.buffer.write(content.encode("latin-1"))
 else:
     sys.exit("Unexpected tool: " + tool)
 '''
@@ -121,6 +121,9 @@ class ImagePatchTests(unittest.TestCase):
         self.write_payload("etc/ck/config.conf", b"example=value\r\n")
         self.write_payload("etc/ck/image-version", b"test-image\n")
         self.write_payload("usr/local/bin/ck-recorder", b"#!/usr/bin/env bash\necho example\n")
+        # A program with bytes that text handling would damage: a Windows line ending and a NUL.
+        self.agent = self.directory / "ck-agent"
+        self.agent.write_bytes(b"\x7fELF\x02\x01\r\n\x00\xff end")
         (self.patch / "mask-units.txt").write_text("# Disable the old service\nold.service\n")
         (self.patch / "remove-files.txt").write_text("# Remove a leftover\n/old-file\n")
         tools = self.directory / "tools"
@@ -144,9 +147,10 @@ class ImagePatchTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 
-    def run_patch(self, **environment):
+    def run_patch(self, agent=None, **environment):
         before = self.image.read_bytes()
-        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), "--in-place", str(self.image)],
+        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), "--in-place", str(self.image),
+                                 "--agent", str(agent or self.agent)],
                                 env=dict(self.environment, **environment), capture_output=True, text=True)
         self.assertEqual(self.image.read_bytes(), before, "Test attempted to modify an image")
         return result
@@ -170,6 +174,45 @@ class ImagePatchTests(unittest.TestCase):
         self.assertIn("rm /old-file\n", commands)
         self.assertIn("symlink /etc/systemd/system/graphical.target.wants/ck-recorder.service "
                       "/etc/systemd/system/ck-recorder.service\n", commands)
+
+    def test_installs_the_agent_unchanged_and_executable_and_enables_the_config_service(self):
+        result = self.run_patch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        state = json.loads(self.state_file.read_text())
+        self.assertEqual(state["files"]["/usr/local/bin/ck-agent"].encode("latin-1"), self.agent.read_bytes())
+        commands = self.commands_file.read_text()
+        self.assertIn("sif /usr/local/bin/ck-agent mode 0100755\n", commands)
+        self.assertIn("symlink /etc/systemd/system/multi-user.target.wants/ck-config.service "
+                      "/etc/systemd/system/ck-config.service\n", commands)
+
+    def test_refuses_an_agent_that_is_not_a_linux_program_before_writing(self):
+        windows_build = self.directory / "ck-agent.exe"
+        windows_build.write_bytes(b"MZ not a linux program")
+        result = self.run_patch(agent=windows_build)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a Linux program", result.stderr)
+        self.assertFalse(self.commands_file.exists())
+
+    def test_refuses_to_run_without_an_agent(self):
+        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), "--in-place", str(self.image)],
+                                env=self.environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--agent", result.stderr)
+
+    def test_fails_when_the_agent_in_the_image_does_not_match(self):
+        result = self.run_patch(CORRUPT_FILE="/usr/local/bin/ck-agent")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MISMATCH /usr/local/bin/ck-agent", result.stdout)
+
+    def test_fails_when_the_config_service_is_not_enabled(self):
+        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-config.service")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-config.service", result.stdout)
+
+    def test_runs_twice_without_trouble(self):
+        self.assertEqual(self.run_patch().returncode, 0)
+        second = self.run_patch(EXISTING_PATHS="/etc:/etc/ck:/usr:/usr/local:/usr/local/bin")
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
 
     def test_does_not_recreate_existing_directories(self):
         self.assertEqual(self.run_patch(EXISTING_PATHS="/etc:/etc/ck").returncode, 0)
