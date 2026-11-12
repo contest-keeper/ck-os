@@ -140,7 +140,7 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
 }
 
 enum Outcome {
-    Report(ck_selftest::Report),
+    Report(Box<ck_selftest::Report>),
     Unreadable(String),
     MachineStopped(String),
     TimedOut,
@@ -150,7 +150,7 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
     let deadline = Instant::now() + timeout;
     loop {
         match ck_selftest::find_report(&machine.serial_text()) {
-            Some(Ok(report)) => return Outcome::Report(report),
+            Some(Ok(report)) => return Outcome::Report(Box::new(report)),
             Some(Err(error)) => return Outcome::Unreadable(error.to_string()),
             None => {}
         }

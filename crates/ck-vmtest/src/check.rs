@@ -42,6 +42,37 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
             applied.allowed_domains
         ));
     }
+    let name = config.computer_name();
+    same(
+        &mut problems,
+        "computer name",
+        Some(name.as_str()),
+        applied.computer_name.as_deref(),
+    );
+    same(
+        &mut problems,
+        "running host name",
+        Some(name.as_str()),
+        applied.running_hostname.as_deref(),
+    );
+    // Bookmarks and the home page are only judged when the admin chose them; otherwise the image's
+    // own stay.
+    let branding = &settings.branding;
+    let titles: Vec<String> = branding.bookmarks.iter().map(|b| b.title.clone()).collect();
+    if !titles.is_empty() && applied.firefox_bookmarks != titles {
+        problems.push(format!(
+            "Firefox bookmarks are {:?}, expected {titles:?}",
+            applied.firefox_bookmarks
+        ));
+    }
+    if let Some(home) = &branding.home_page {
+        same(
+            &mut problems,
+            "Firefox home page",
+            Some(home.as_str()),
+            applied.firefox_home_page.as_deref(),
+        );
+    }
     if !applied.config_hash_matches {
         problems.push("the stored copy of the settings does not match its hash".to_owned());
     }
@@ -151,6 +182,9 @@ mod tests {
                 recording_mode: Some("low".to_owned()),
                 allowed_domains: vec!["example.org".to_owned(), "docs.example.org".to_owned()],
                 config_hash_matches: true,
+                computer_name: Some("team-a-1".to_owned()),
+                running_hostname: Some("team-a-1".to_owned()),
+                ..Applied::default()
             },
             units: vec![
                 state("ck-config", "active", "enabled"),
@@ -203,6 +237,33 @@ mod tests {
         let mut report = good_report();
         report.applied.recording_mode = Some("off".to_owned());
         report.units[1].active = "inactive".to_owned();
+        assert_eq!(problems(&stick, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_computer_name_and_the_chosen_firefox_settings_are_checked() {
+        let mut stick = config();
+        stick.machine_number = Some(7);
+        stick.settings.branding.bookmarks = vec![ck_protocol::Bookmark {
+            title: "Judge".to_owned(),
+            url: "https://judge.example/".to_owned(),
+        }];
+        stick.settings.branding.home_page = Some("https://judge.example/".to_owned());
+
+        let mut report = good_report();
+        report.applied.computer_name = Some("team-a-7".to_owned());
+        report.applied.running_hostname = Some("icpc".to_owned());
+        report.applied.firefox_bookmarks = vec!["Other".to_owned()];
+        report.applied.firefox_home_page = None;
+        let found = problems(&stick, &report);
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(found.iter().any(|p| p.starts_with("running host name is")));
+        assert!(found.iter().any(|p| p.contains("bookmarks")));
+        assert!(found.iter().any(|p| p.contains("home page")));
+
+        report.applied.running_hostname = Some("team-a-7".to_owned());
+        report.applied.firefox_bookmarks = vec!["Judge".to_owned()];
+        report.applied.firefox_home_page = Some("https://judge.example/".to_owned());
         assert_eq!(problems(&stick, &report), Vec::<String>::new());
     }
 }
