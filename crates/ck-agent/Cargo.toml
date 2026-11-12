@@ -11,7 +11,10 @@ workspace = true
 
 [dependencies]
 ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
+ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "e569104d48c803b42dc6148819ece612f8ae88ac", version = "0.1.0" }
+ck-selftest = { path = "../ck-selftest", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }
+serde_json = "1.0.154"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std"] }
 

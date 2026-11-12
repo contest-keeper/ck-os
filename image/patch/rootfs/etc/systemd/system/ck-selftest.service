@@ -1,0 +1,13 @@
+[Unit]
+Description=Keeper OS: report what was applied (test machines only)
+# Runs once the desktop and the recorder had their chance to start, so the report shows the end state.
+After=ck-config.service ck-recorder.service display-manager.service multi-user.target
+
+[Service]
+Type=oneshot
+# Does nothing unless the machine was started with the OEM string ck-selftest=1, which only the
+# VM test sets. A real stick prints no report and this service ends at once.
+ExecStart=/usr/local/bin/ck-agent self-test --only-if-requested --serial /dev/ttyS0
+
+[Install]
+WantedBy=multi-user.target

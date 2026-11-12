@@ -3,11 +3,15 @@
 //! For now it has one command, `apply-config`, which `ck-config.service` runs at every boot.
 //! Log lines go to stderr, where the journal collects them.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{Error, Root, apply_basics, load};
 use clap::{Parser, Subcommand};
+
+mod self_test;
 
 /// The settings file is missing, so the image keeps its defaults. The service treats this
 /// differently from a real failure.
@@ -32,6 +36,18 @@ enum Command {
         #[arg(long, default_value = "/")]
         root: PathBuf,
     },
+    /// Report what is applied on this machine, for the VM test
+    SelfTest {
+        /// The folder that stands for `/` (only for tests; the stick uses `/`)
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+        /// Do nothing unless the machine was started as a test machine
+        #[arg(long)]
+        only_if_requested: bool,
+        /// Write the report to this serial port instead of printing it
+        #[arg(long)]
+        serial: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -44,6 +60,11 @@ fn main() -> ExitCode {
 
     match cli.command {
         Command::ApplyConfig { root } => apply_config(&Root::new(root)),
+        Command::SelfTest {
+            root,
+            only_if_requested,
+            serial,
+        } => self_test(&root, only_if_requested, serial.as_deref()),
     }
 }
 
@@ -67,5 +88,30 @@ fn apply_config(root: &Root) -> ExitCode {
         return ExitCode::FAILURE;
     }
     tracing::info!("settings applied");
+    ExitCode::SUCCESS
+}
+
+fn self_test(
+    root: &std::path::Path,
+    only_if_requested: bool,
+    serial: Option<&std::path::Path>,
+) -> ExitCode {
+    if only_if_requested && !self_test::requested(root) {
+        tracing::info!("not a test machine, no self-test report");
+        return ExitCode::SUCCESS;
+    }
+    let report = self_test::collect(root, &self_test::systemctl_state);
+    let block = ck_selftest::to_serial_block(&report);
+    let written = match serial {
+        Some(port) => OpenOptions::new()
+            .write(true)
+            .open(port)
+            .and_then(|mut port| port.write_all(block.as_bytes())),
+        None => std::io::stdout().write_all(block.as_bytes()),
+    };
+    if let Err(error) = written {
+        tracing::error!("cannot write the self-test report: {error}");
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }

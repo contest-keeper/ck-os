@@ -54,15 +54,7 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
     if !problems.is_empty() {
         return Err(Error::SettingsInvalid(problems));
     }
-    // Team and site end up in one-line files. Newer ck-protocol versions check this in `validate`.
-    for (field, text) in [
-        ("team", &config.settings.team),
-        ("site", &config.settings.site),
-    ] {
-        if text.trim().is_empty() || text.chars().any(char::is_control) {
-            return Err(Error::SettingsText(field));
-        }
-    }
+    // `validate` also refuses a team or site that is not one line, since both end up in one-line files.
     let sha256 = ck_crypto::sha256_hex(&raw);
     Ok(Loaded {
         config,
