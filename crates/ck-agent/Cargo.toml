@@ -10,7 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-ck-agent-config = { path = "../ck-agent-config" }
+ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std"] }
