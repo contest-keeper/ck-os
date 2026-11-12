@@ -1,9 +1,6 @@
 # Services a contest machine doesn't need. Each is masked (linked to /dev/null) and removed from
 # every *.wants folder, so nothing can start it. One unit per line; '#' starts a comment.
 
-# Disable the base image's recorder; ck-recorder.service replaces it.
-icpc-screen-record.service
-
 # Automatic updates and update notifications (unexpected network and disk use mid-contest)
 unattended-upgrades.service
 apt-daily.timer

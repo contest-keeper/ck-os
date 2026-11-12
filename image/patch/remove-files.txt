@@ -1,8 +1,4 @@
 # Files removed from the image. One absolute path per line; '#' starts a comment.
 
-# Legacy base-image recordings: remove the original paths, not Keeper recordings.
-/var/lib/icpc-recordings/screen-20261029-163947.mkv
-/var/lib/icpc-recordings/screen-20261029-163957.mkv
-
 # D-Bus alias of the masked ModemManager service
 /etc/systemd/system/dbus-org.freedesktop.ModemManager1.service
