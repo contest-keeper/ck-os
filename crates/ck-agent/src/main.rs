@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ck_agent_config::{Error, Root, apply_basics, load};
+use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
 use clap::{Parser, Subcommand};
 
 mod self_test;
@@ -83,9 +83,12 @@ fn apply_config(root: &Root) -> ExitCode {
     // The stick id is not secret; the token and the file content are never logged.
     tracing::info!(stick = %loaded.config.stick_id, sha256 = %loaded.sha256, "settings read");
 
-    if let Err(error) = apply_basics(root, &loaded) {
+    if let Err(error) = apply_basics(root, &loaded).and_then(|()| apply_branding(root, &loaded)) {
         tracing::error!("applying the settings failed: {error}");
         return ExitCode::FAILURE;
+    }
+    if root.is_real_root() {
+        set_running_hostname(&loaded.config.computer_name());
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
@@ -114,4 +117,14 @@ fn self_test(
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// `/etc/hostname` is only read when the machine starts, which is before this runs, so the running
+/// machine is told its new name as well.
+fn set_running_hostname(name: &str) {
+    match std::process::Command::new("hostname").arg(name).status() {
+        Ok(status) if status.success() => tracing::info!("computer name set to {name}"),
+        Ok(status) => tracing::warn!("could not set the computer name ({status})"),
+        Err(error) => tracing::warn!("could not set the computer name: {error}"),
+    }
 }

@@ -13,6 +13,8 @@ pub enum Error {
     SettingsTooLarge(u64),
     #[error("the settings have problems: {}", join(.0))]
     SettingsInvalid(Vec<Problem>),
+    #[error("the Firefox policies file cannot be changed: {0}")]
+    PoliciesUnreadable(String),
     #[error("{context}: {source}")]
     Io {
         context: String,
