@@ -4,6 +4,10 @@
 //! files, signed with the stick's secret and sent over a direct connection, never through the
 //! proxy settings of the contestant's session.
 
+mod queue;
+
+pub use queue::{MAX_PAYLOAD_BYTES, MAX_PENDING, Queue};
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,6 +20,8 @@ use ck_protocol::{
 
 /// The root-only copy of the settings that `ck-agent apply-config` writes at boot.
 const CONFIG_COPY: &str = "etc/ck/config.json";
+/// Where events go. The Hub answers 409 for one it already has, which counts as sent.
+pub const EVENTS_PATH: &str = "/api/v1/events";
 /// How long one heartbeat may take. A slow network must not make the next one late.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -35,6 +41,8 @@ pub enum Error {
     Rejected(u16),
     #[error("cannot reach the Hub: {0}")]
     Unreachable(String),
+    #[error("the event queue: {0}")]
+    Queue(String),
 }
 
 /// One stick's reporting state: who it is, which boot this is, and the next sequence number.
@@ -123,7 +131,49 @@ impl Uplink {
     /// there is no answer.
     pub fn send(&self, url: &str, heartbeat: &Heartbeat) -> Result<(), Error> {
         let body = serde_json::to_vec(heartbeat).expect("a heartbeat always serializes");
-        let signature = ck_crypto::sign(&self.config.token, &body);
+        self.post(url, &body)
+    }
+
+    /// The address events go to, or `None` when the admin set no server.
+    #[must_use]
+    pub fn events_url(&self) -> Option<String> {
+        let base = self.config.settings.api.url.trim_end_matches('/');
+        (!base.is_empty()).then(|| format!("{base}{EVENTS_PATH}"))
+    }
+
+    /// The stick this agent reports for, and the id of this boot: what the queue needs to chain
+    /// events.
+    #[must_use]
+    pub fn identity(&self) -> (&ck_protocol::StickId, &str) {
+        (&self.config.stick_id, &self.boot_id)
+    }
+
+    /// Sends the waiting events in order, taking each out of the queue once the Hub has it, and
+    /// stops at the first one that does not get through so the order is kept. Returns how many
+    /// were sent.
+    ///
+    /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
+    /// sent.
+    ///
+    /// # Errors
+    /// The error that stopped the sending. Events not yet sent stay in the queue.
+    pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
+        let mut sent = 0;
+        for (counter, event) in queue.pending()? {
+            match self.post(url, &event.canonical_bytes()) {
+                Ok(()) | Err(Error::Rejected(409)) => {
+                    queue.remove(counter)?;
+                    sent += 1;
+                }
+                Err(error) => return if sent == 0 { Err(error) } else { Ok(sent) },
+            }
+        }
+        Ok(sent)
+    }
+
+    /// Signs `body` with the stick's secret and posts it.
+    fn post(&self, url: &str, body: &[u8]) -> Result<(), Error> {
+        let signature = ck_crypto::sign(&self.config.token, body);
 
         // `proxy(None)`: the Hub is reached directly, whatever the session's proxy settings say.
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -136,7 +186,7 @@ impl Uplink {
             .header(STICK_HEADER, self.config.stick_id.as_str())
             .header(SIGNATURE_HEADER, &signature)
             .content_type("application/json")
-            .send(&body[..]);
+            .send(body);
         match result {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(status)) => Err(Error::Rejected(status)),

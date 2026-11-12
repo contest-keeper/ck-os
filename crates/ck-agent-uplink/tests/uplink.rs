@@ -6,8 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use chrono::{DateTime, Utc};
-use ck_agent_uplink::{Error, Uplink, recorder_state};
-use ck_protocol::{Heartbeat, RecorderState, RecordingMode, Token};
+use ck_agent_uplink::{Error, Queue, Uplink, recorder_state};
+use ck_protocol::{
+    EventKind, FIRST_PREV_HASH, Heartbeat, RecorderState, RecordingMode, Token, verify_chain,
+};
+use serde_json::json;
 use tempfile::TempDir;
 
 const TOKEN: &str = "the-stick-secret";
@@ -251,4 +254,175 @@ fn the_recorder_state_follows_the_mode_and_the_service() {
         recorder_state(RecordingMode::Standard, false),
         RecorderState::Waiting
     );
+}
+
+fn sha(bytes: &[u8]) -> String {
+    ck_crypto::sha256_hex(bytes)
+}
+
+fn push(queue: &Queue, uplink: &Uplink, user: &str) -> ck_protocol::Event {
+    let (stick, boot) = uplink.identity();
+    queue
+        .push(
+            stick,
+            boot,
+            EventKind::Login,
+            json!({ "username": user }),
+            time(),
+        )
+        .expect("push")
+}
+
+#[test]
+fn queued_events_form_a_chain_that_carries_on_after_a_restart_and_starts_again_each_boot() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://127.0.0.1:1");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue_dir = dir.path().join("var/lib/ck/queue");
+
+    let queue = Queue::open(&queue_dir).expect("open");
+    push(&queue, &uplink, "ana");
+    push(&queue, &uplink, "bob");
+    // The agent restarts: a new Queue on the same folder carries on the same chain.
+    let queue = Queue::open(&queue_dir).expect("reopen");
+    push(&queue, &uplink, "cris");
+
+    let events: Vec<_> = queue
+        .pending()
+        .expect("pending")
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    assert_eq!(events[0].prev_hash, FIRST_PREV_HASH);
+    assert_eq!(verify_chain(&events, 1, FIRST_PREV_HASH, sha), Ok(()));
+
+    // After a reboot the boot id differs and the chain starts again at 1, behind the old events.
+    let (stick, _) = uplink.identity();
+    let next = queue
+        .push(stick, "another-boot", EventKind::Login, json!({}), time())
+        .expect("push");
+    assert_eq!((next.seq, next.prev_hash.as_str()), (1, FIRST_PREV_HASH));
+    assert_eq!(
+        queue.pending().expect("pending").len(),
+        4,
+        "the old boot's events wait too"
+    );
+}
+
+#[test]
+fn events_are_sent_in_order_signed_and_taken_out_of_the_queue() {
+    let hub = fake_hub(vec![200, 200, 200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    for user in ["ana", "bob", "cris"] {
+        push(&queue, &uplink, user);
+    }
+
+    let url = uplink.events_url().expect("url");
+    assert!(url.ends_with("/api/v1/events"), "{url}");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 3);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+
+    let requests = hub.requests.lock().expect("lock");
+    let users: Vec<String> = requests
+        .iter()
+        .map(|r| {
+            let event: ck_protocol::Event = serde_json::from_slice(&r.body).expect("an event");
+            event.payload["username"].as_str().expect("user").to_owned()
+        })
+        .collect();
+    assert_eq!(users, ["ana", "bob", "cris"]);
+    for request in requests.iter() {
+        assert_eq!(request.path, "/api/v1/events");
+        let signature = request.header("X-CK-Signature").expect("signature");
+        assert!(ck_crypto::verify(
+            &Token::new(TOKEN),
+            &request.body,
+            signature
+        ));
+    }
+}
+
+#[test]
+fn a_failure_keeps_the_rest_in_order_and_a_later_flush_sends_them() {
+    let hub = fake_hub(vec![200, 500, 200, 200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    for user in ["ana", "bob", "cris"] {
+        push(&queue, &uplink, user);
+    }
+    let url = uplink.events_url().expect("url");
+
+    assert_eq!(
+        uplink.flush(&queue, &url).expect("first flush"),
+        1,
+        "stopped at the 500"
+    );
+    let waiting: Vec<u64> = queue
+        .pending()
+        .expect("pending")
+        .iter()
+        .map(|(_, e)| e.seq)
+        .collect();
+    assert_eq!(waiting, [2, 3], "nothing lost, nothing out of order");
+
+    assert_eq!(uplink.flush(&queue, &url).expect("second flush"), 2);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+}
+
+#[test]
+fn an_event_the_hub_already_has_counts_as_sent_and_an_unreachable_hub_loses_nothing() {
+    let hub = fake_hub(vec![409]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    push(&queue, &uplink, "ana");
+    let url = uplink.events_url().expect("url");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 1);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+
+    push(&queue, &uplink, "bob");
+    let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let dead = format!(
+        "http://{}/api/v1/events",
+        closed.local_addr().expect("address")
+    );
+    drop(closed);
+    assert!(matches!(
+        uplink.flush(&queue, &dead),
+        Err(Error::Unreachable(_))
+    ));
+    assert_eq!(queue.pending().expect("pending").len(), 1);
+}
+
+#[test]
+fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://127.0.0.1:1");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue_dir = dir.path().join("queue");
+    let queue = Queue::open(&queue_dir).expect("open");
+    push(&queue, &uplink, "ana");
+    fs::write(queue_dir.join("event-000000000002.json"), "{ not an event").expect("damage");
+    push(&queue, &uplink, "bob");
+
+    let events = queue.pending().expect("pending");
+    assert_eq!(
+        events.len(),
+        2,
+        "the damaged file does not block the others"
+    );
+    assert!(queue_dir.join("event-000000000002.bad").exists());
+
+    let (stick, boot) = uplink.identity();
+    let huge = json!({ "text": "x".repeat(20_000) });
+    let refused = queue.push(stick, boot, EventKind::Login, huge, time());
+    assert!(matches!(refused, Err(Error::Queue(_))), "{refused:?}");
+    assert_eq!(queue.pending().expect("pending").len(), 2);
 }
