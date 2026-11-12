@@ -20,6 +20,7 @@ pub struct Report {
 
 /// What the agent actually wrote to the system, read back from the system's own files.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Applied {
     pub stick_id: Option<String>,
     pub team: Option<String>,
@@ -29,6 +30,13 @@ pub struct Applied {
     pub allowed_domains: Vec<String>,
     /// The root-only copy of the settings matches the hash the agent stored next to it.
     pub config_hash_matches: bool,
+    /// What `/etc/hostname` says.
+    pub computer_name: Option<String>,
+    /// The name the running machine has, which can differ from the file if the rename failed.
+    pub running_hostname: Option<String>,
+    /// The titles of the Firefox bookmarks, in order.
+    pub firefox_bookmarks: Vec<String>,
+    pub firefox_home_page: Option<String>,
 }
 
 /// What `systemctl is-active` and `is-enabled` say about one service.

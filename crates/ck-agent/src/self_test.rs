@@ -87,6 +87,7 @@ fn applied(root: &Path) -> Applied {
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
         .and_then(|json| json.get("stick_id")?.as_str().map(str::to_owned));
 
+    let (firefox_bookmarks, firefox_home_page) = firefox(root);
     Applied {
         stick_id,
         team: read_trimmed(root, "etc/ck/team"),
@@ -94,6 +95,10 @@ fn applied(root: &Path) -> Applied {
         recording_mode: recording_mode(root),
         allowed_domains: allowed_domains(root),
         config_hash_matches: hash_matches,
+        computer_name: read_trimmed(root, "etc/hostname"),
+        running_hostname: read_trimmed(root, "proc/sys/kernel/hostname"),
+        firefox_bookmarks,
+        firefox_home_page,
     }
 }
 
@@ -124,4 +129,29 @@ fn allowed_domains(root: &Path) -> Vec<String> {
         }
     }
     sites
+}
+
+/// The bookmark titles and the home page from Firefox's policies file.
+fn firefox(root: &Path) -> (Vec<String>, Option<String>) {
+    let text = fs::read_to_string(root.join("usr/lib/firefox/distribution/policies.json")).ok();
+    let policies = text
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| json.get("policies").cloned());
+    let Some(policies) = policies else {
+        return (Vec::new(), None);
+    };
+    let mut titles = Vec::new();
+    if let Some(bookmarks) = policies.get("Bookmarks").and_then(|b| b.as_array()) {
+        for bookmark in bookmarks {
+            if let Some(title) = bookmark.get("Title").and_then(|t| t.as_str()) {
+                titles.push(title.to_owned());
+            }
+        }
+    }
+    let home = policies
+        .get("Homepage")
+        .and_then(|h| h.get("URL"))
+        .and_then(|u| u.as_str())
+        .map(str::to_owned);
+    (titles, home)
 }
