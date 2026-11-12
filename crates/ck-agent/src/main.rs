@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
-use ck_agent_uplink::{Uplink, recorder_state};
+use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
 mod self_test;
@@ -17,6 +17,8 @@ mod self_test;
 /// The settings file is missing, so the image keeps its defaults. The service treats this
 /// differently from a real failure.
 const EXIT_NO_SETTINGS: u8 = 3;
+/// Where waiting events are kept, below the root.
+const QUEUE_FOLDER: &str = "var/lib/ck/queue";
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +48,16 @@ enum Command {
         #[arg(long)]
         once: bool,
     },
+    /// Add an event to the queue `uplink` sends from, for tools and tests
+    Enqueue {
+        /// The folder that stands for `/` (only for tests; the stick uses `/`)
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+        /// What happened: `login` or `submission`
+        kind: String,
+        /// The details, as JSON. Never a password, a cookie or a session id
+        payload: String,
+    },
     /// Report what is applied on this machine, for the VM test
     SelfTest {
         /// The folder that stands for `/` (only for tests; the stick uses `/`)
@@ -71,6 +83,11 @@ fn main() -> ExitCode {
     match cli.command {
         Command::ApplyConfig { root } => apply_config(&Root::new(root)),
         Command::Uplink { root, once } => uplink(&root, once),
+        Command::Enqueue {
+            root,
+            kind,
+            payload,
+        } => enqueue(&root, &kind, &payload),
         Command::SelfTest {
             root,
             only_if_requested,
@@ -159,6 +176,13 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     tracing::info!(%url, "reporting to the Hub");
+    let queue = match Queue::open(root.join(QUEUE_FOLDER)) {
+        Ok(queue) => Some(queue),
+        Err(error) => {
+            tracing::warn!("events cannot be queued, only heartbeats are sent: {error}");
+            None
+        }
+    };
 
     let mut failing = false;
     loop {
@@ -181,6 +205,15 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
             }
             Ok(()) | Err(_) => {}
         }
+        if let (Some(queue), Some(events_url)) = (&queue, uplink.events_url()) {
+            match uplink.flush(queue, &events_url) {
+                Ok(0) => {}
+                Ok(sent) => tracing::info!(sent, "events delivered to the Hub"),
+                Err(error) => {
+                    tracing::warn!("events are waiting, the Hub did not take them: {error}");
+                }
+            }
+        }
         if once {
             return if result.is_ok() {
                 ExitCode::SUCCESS
@@ -189,5 +222,38 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
             };
         }
         std::thread::sleep(uplink.interval());
+    }
+}
+
+fn enqueue(root: &std::path::Path, kind: &str, payload: &str) -> ExitCode {
+    let kind = match kind {
+        "login" => ck_protocol::EventKind::Login,
+        "submission" => ck_protocol::EventKind::Submission,
+        other => {
+            tracing::error!("unknown event kind '{other}': use login or submission");
+            return ExitCode::FAILURE;
+        }
+    };
+    let payload: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!("the payload is not JSON: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let result = Uplink::load(root).and_then(|uplink| {
+        let queue = Queue::open(root.join(QUEUE_FOLDER))?;
+        let (stick, boot) = uplink.identity();
+        queue.push(stick, boot, kind, payload, chrono::Utc::now())
+    });
+    match result {
+        Ok(event) => {
+            tracing::info!(seq = event.seq, "event queued");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!("cannot queue the event: {error}");
+            ExitCode::FAILURE
+        }
     }
 }

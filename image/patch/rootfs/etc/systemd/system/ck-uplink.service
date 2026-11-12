@@ -13,6 +13,9 @@ RestartSec=10
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectSystem=strict
+# The queue of events waiting for the Hub, created root-only by systemd.
+StateDirectory=ck/queue
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
