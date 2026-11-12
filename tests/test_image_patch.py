@@ -216,6 +216,14 @@ class ImagePatchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-selftest.service", result.stdout)
 
+    def test_enables_the_uplink_service_and_checks_it(self):
+        self.assertEqual(self.run_patch().returncode, 0)
+        self.assertIn("symlink /etc/systemd/system/multi-user.target.wants/ck-uplink.service "
+                      "/etc/systemd/system/ck-uplink.service\n", self.commands_file.read_text())
+        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-uplink.service")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-uplink.service", result.stdout)
+
     def test_fails_when_the_config_service_is_not_enabled(self):
         result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-config.service")
         self.assertNotEqual(result.returncode, 0)

@@ -10,7 +10,12 @@ use std::process::Command;
 use ck_selftest::{Applied, Report, UnitState};
 
 /// The services the VM test cares about.
-const UNITS: [&str; 3] = ["ck-config", "ck-recorder", "icpc-screen-record"];
+const UNITS: [&str; 4] = [
+    "ck-config",
+    "ck-recorder",
+    "ck-uplink",
+    "icpc-screen-record",
+];
 
 /// A test machine asks for the report with this OEM string, which QEMU can set with
 /// `-smbios type=11,value=ck-selftest=1`. A real stick never has it.

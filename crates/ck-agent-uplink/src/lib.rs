@@ -1,0 +1,178 @@
+//! Sends the stick's heartbeats to the Hub.
+//!
+//! A heartbeat says the stick is alive and which settings it runs. It is built from the machine's own
+//! files, signed with the stick's secret and sent over a direct connection, never through the
+//! proxy settings of the contestant's session.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use ck_protocol::{
+    HEARTBEAT_PATH, Heartbeat, RecorderState, RecorderStatus, RecordingMode, SIGNATURE_HEADER,
+    STICK_HEADER, StickConfig,
+};
+
+/// The root-only copy of the settings that `ck-agent apply-config` writes at boot.
+const CONFIG_COPY: &str = "etc/ck/config.json";
+/// How long one heartbeat may take. A slow network must not make the next one late.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("there are no settings at /{0}; the agent has not applied them yet")]
+    NoSettings(&'static str),
+    #[error("the settings at /{CONFIG_COPY} are not valid: {0}")]
+    BadSettings(String),
+    #[error("cannot read /{path}: {source}")]
+    Io {
+        path: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the Hub did not accept the heartbeat: HTTP {0}")]
+    Rejected(u16),
+    #[error("cannot reach the Hub: {0}")]
+    Unreachable(String),
+}
+
+/// One stick's reporting state: who it is, which boot this is, and the next sequence number.
+pub struct Uplink {
+    root: PathBuf,
+    config: StickConfig,
+    boot_id: String,
+    seq: u64,
+}
+
+impl Uplink {
+    /// Reads the settings the agent applied. `root` is `/` on the stick, a folder in tests.
+    ///
+    /// # Errors
+    /// Fails when the settings are missing or not valid.
+    pub fn load(root: &Path) -> Result<Self, Error> {
+        let bytes = fs::read(root.join(CONFIG_COPY)).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::NoSettings(CONFIG_COPY)
+            } else {
+                Error::Io {
+                    path: CONFIG_COPY,
+                    source: e,
+                }
+            }
+        })?;
+        let config: StickConfig =
+            serde_json::from_slice(&bytes).map_err(|e| Error::BadSettings(e.to_string()))?;
+        let problems = config.validate();
+        if !problems.is_empty() {
+            let text: Vec<String> = problems.iter().map(ToString::to_string).collect();
+            return Err(Error::BadSettings(text.join("; ")));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            config,
+            boot_id: read_trimmed(root, "proc/sys/kernel/random/boot_id").unwrap_or_default(),
+            seq: 0,
+        })
+    }
+
+    /// The address heartbeats go to, or `None` when the admin set no server (no reporting).
+    #[must_use]
+    pub fn url(&self) -> Option<String> {
+        let base = self.config.settings.api.url.trim_end_matches('/');
+        (!base.is_empty()).then(|| format!("{base}{HEARTBEAT_PATH}"))
+    }
+
+    #[must_use]
+    pub fn interval(&self) -> Duration {
+        Duration::from_secs(self.config.settings.api.heartbeat_s.max(1))
+    }
+
+    #[must_use]
+    pub fn recording_mode(&self) -> RecordingMode {
+        self.config.settings.recording.mode
+    }
+
+    /// The next heartbeat. The sequence number goes up by one each time, starting at 1 every boot,
+    /// so the Hub can see when a message was lost.
+    pub fn next_heartbeat(&mut self, now: DateTime<Utc>, recorder: RecorderState) -> Heartbeat {
+        self.seq += 1;
+        let settings = &self.config.settings;
+        Heartbeat {
+            stick_id: self.config.stick_id.clone(),
+            boot_id: self.boot_id.clone(),
+            seq: self.seq,
+            sent_at: now,
+            uptime_s: uptime_seconds(&self.root),
+            hostname: read_trimmed(&self.root, "proc/sys/kernel/hostname").unwrap_or_default(),
+            image_version: read_trimmed(&self.root, "etc/ck/image-version").unwrap_or_default(),
+            config_sha256: read_trimmed(&self.root, "etc/ck/config.sha256").unwrap_or_default(),
+            team: settings.team.trim().to_owned(),
+            site: settings.site.trim().to_owned(),
+            recording: RecorderStatus {
+                mode: settings.recording.mode,
+                state: recorder,
+            },
+        }
+    }
+
+    /// Signs `heartbeat` with the stick's secret and sends it.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] when the Hub answers with an error status, [`Error::Unreachable`] when
+    /// there is no answer.
+    pub fn send(&self, url: &str, heartbeat: &Heartbeat) -> Result<(), Error> {
+        let body = serde_json::to_vec(heartbeat).expect("a heartbeat always serializes");
+        let signature = ck_crypto::sign(&self.config.token, &body);
+
+        // `proxy(None)`: the Hub is reached directly, whatever the session's proxy settings say.
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .proxy(None)
+            .timeout_global(Some(SEND_TIMEOUT))
+            .build()
+            .into();
+        let result = agent
+            .post(url)
+            .header(STICK_HEADER, self.config.stick_id.as_str())
+            .header(SIGNATURE_HEADER, &signature)
+            .content_type("application/json")
+            .send(&body[..]);
+        match result {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(status)) => Err(Error::Rejected(status)),
+            Err(other) => Err(Error::Unreachable(other.to_string())),
+        }
+    }
+}
+
+/// What the recorder is doing, from the mode the admin chose and whether `ck-recorder` runs.
+/// "Waiting" covers the start delay and a recorder that has stopped; the agent cannot tell them
+/// apart from outside.
+#[must_use]
+pub fn recorder_state(mode: RecordingMode, service_active: bool) -> RecorderState {
+    if mode == RecordingMode::Off {
+        RecorderState::Off
+    } else if service_active {
+        RecorderState::Recording
+    } else {
+        RecorderState::Waiting
+    }
+}
+
+fn read_trimmed(root: &Path, relative: &str) -> Option<String> {
+    let text = fs::read_to_string(root.join(relative)).ok()?;
+    Some(text.trim().to_owned())
+}
+
+fn uptime_seconds(root: &Path) -> u64 {
+    read_trimmed(root, "proc/uptime")
+        .and_then(|text| {
+            text.split_whitespace()
+                .next()?
+                .split('.')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .unwrap_or(0)
+}

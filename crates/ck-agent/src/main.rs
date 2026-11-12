@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
+use ck_agent_uplink::{Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
 mod self_test;
@@ -36,6 +37,15 @@ enum Command {
         #[arg(long, default_value = "/")]
         root: PathBuf,
     },
+    /// Send a heartbeat to the Hub every few seconds (the settings say how often)
+    Uplink {
+        /// The folder that stands for `/` (only for tests; the stick uses `/`)
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+        /// Send one heartbeat and stop, for tests
+        #[arg(long)]
+        once: bool,
+    },
     /// Report what is applied on this machine, for the VM test
     SelfTest {
         /// The folder that stands for `/` (only for tests; the stick uses `/`)
@@ -60,6 +70,7 @@ fn main() -> ExitCode {
 
     match cli.command {
         Command::ApplyConfig { root } => apply_config(&Root::new(root)),
+        Command::Uplink { root, once } => uplink(&root, once),
         Command::SelfTest {
             root,
             only_if_requested,
@@ -126,5 +137,57 @@ fn set_running_hostname(name: &str) {
         Ok(status) if status.success() => tracing::info!("computer name set to {name}"),
         Ok(status) => tracing::warn!("could not set the computer name ({status})"),
         Err(error) => tracing::warn!("could not set the computer name: {error}"),
+    }
+}
+
+fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
+    let mut uplink = match Uplink::load(root) {
+        Ok(uplink) => uplink,
+        // An unconfigured stick has nothing to report; stopping quietly keeps the service from
+        // being restarted again and again.
+        Err(error @ ck_agent_uplink::Error::NoSettings(_)) => {
+            tracing::info!("not reporting: {error}");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            tracing::error!("cannot start reporting: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(url) = uplink.url() else {
+        tracing::info!("the settings name no server, so nothing is reported");
+        return ExitCode::SUCCESS;
+    };
+    tracing::info!(%url, "reporting to the Hub");
+
+    let mut failing = false;
+    loop {
+        let running = self_test::systemctl_state("ck-recorder").active == "active";
+        let heartbeat = uplink.next_heartbeat(
+            chrono::Utc::now(),
+            recorder_state(uplink.recording_mode(), running),
+        );
+        let result = uplink.send(&url, &heartbeat);
+        // Say it once when reporting starts to fail and once when it works again, not every 15 s.
+        match &result {
+            Ok(()) if failing => {
+                failing = false;
+                tracing::info!(seq = heartbeat.seq, "reporting to the Hub again");
+            }
+            Ok(()) if heartbeat.seq == 1 => tracing::info!("the first heartbeat was accepted"),
+            Err(error) if !failing => {
+                failing = true;
+                tracing::warn!("the heartbeat failed, trying again every interval: {error}");
+            }
+            Ok(()) | Err(_) => {}
+        }
+        if once {
+            return if result.is_ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+        std::thread::sleep(uplink.interval());
     }
 }

@@ -1,0 +1,18 @@
+[Unit]
+Description=Keeper OS: send heartbeats to the Hub
+# The settings and the stick's secret are written by ck-config, so wait for it. A stick whose
+# settings name no server, or none at all, has nothing to report and this service ends at once.
+After=ck-config.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ck-agent uplink
+Restart=on-failure
+RestartSec=10
+# It reads the root-only copy of the settings and talks to the network, nothing else.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
