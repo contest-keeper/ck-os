@@ -1,0 +1,20 @@
+[package]
+name = "ck-vmtest"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ck-image = { git = "https://github.com/contest-keeper/ck-protocol", rev = "d36e0cbf785c1c27a8c5de7356cb5d870ff66d35", version = "0.1.0" }
+ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "d36e0cbf785c1c27a8c5de7356cb5d870ff66d35", version = "0.1.0" }
+ck-selftest = { path = "../ck-selftest", version = "0.1.0" }
+clap = { version = "4.5.51", features = ["derive"] }
+png = "0.17.16"
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
