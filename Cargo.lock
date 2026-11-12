@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ck-crypto"
 version = "0.1.0"
-source = "git+https://github.com/contest-keeper/ck-protocol?rev=d36e0cbf785c1c27a8c5de7356cb5d870ff66d35#d36e0cbf785c1c27a8c5de7356cb5d870ff66d35"
+source = "git+https://github.com/contest-keeper/ck-protocol?rev=e569104d48c803b42dc6148819ece612f8ae88ac#e569104d48c803b42dc6148819ece612f8ae88ac"
 dependencies = [
  "base64",
  "ck-protocol",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "ck-image"
 version = "0.1.0"
-source = "git+https://github.com/contest-keeper/ck-protocol?rev=d36e0cbf785c1c27a8c5de7356cb5d870ff66d35#d36e0cbf785c1c27a8c5de7356cb5d870ff66d35"
+source = "git+https://github.com/contest-keeper/ck-protocol?rev=e569104d48c803b42dc6148819ece612f8ae88ac#e569104d48c803b42dc6148819ece612f8ae88ac"
 dependencies = [
  "crc32fast",
  "fatfs",
@@ -179,7 +179,7 @@ dependencies = [
 [[package]]
 name = "ck-protocol"
 version = "0.1.0"
-source = "git+https://github.com/contest-keeper/ck-protocol?rev=d36e0cbf785c1c27a8c5de7356cb5d870ff66d35#d36e0cbf785c1c27a8c5de7356cb5d870ff66d35"
+source = "git+https://github.com/contest-keeper/ck-protocol?rev=e569104d48c803b42dc6148819ece612f8ae88ac#e569104d48c803b42dc6148819ece612f8ae88ac"
 dependencies = [
  "chrono",
  "serde",
