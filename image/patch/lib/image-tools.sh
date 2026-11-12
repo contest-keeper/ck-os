@@ -123,7 +123,7 @@ payload_file_mode() {
   local image_path=$1
   # Mode 0644 allows only the owner to write; 0755 also allows execution.
   case "$image_path" in
-    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent)
+    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome)
       printf '0100755\n'
       ;;
     *)

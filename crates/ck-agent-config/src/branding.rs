@@ -1,4 +1,5 @@
-//! What contestants see on the machine: its name, the wallpaper and the Firefox bookmarks.
+//! What contestants see on the machine: its name, the wallpaper, the Firefox bookmarks and the
+//! welcome text.
 //!
 //! Like the rest of the agent's work, every step starts from what the admin chose and overwrites
 //! its own files, so running it again at the next boot gives the same result.
@@ -20,10 +21,15 @@ const EFI_FOLDER: &str = "/boot/efi/ck";
 /// The image's own `firstLogin.sh` shows this file when it exists and its default wallpaper otherwise.
 const TEAM_WALLPAPER: &str = "/icpc/teamWallpaper.png";
 const FIREFOX_POLICIES: &str = "/usr/lib/firefox/distribution/policies.json";
+/// `ck-welcome`, which the image starts with the desktop, shows these two files when the text exists.
+const WELCOME_TEXT: &str = "/etc/ck/welcome.txt";
+const WELCOME_TITLE: &str = "/etc/ck/welcome-title";
+/// A welcome text is a few lines; a bigger one is not what the admin meant to show in a window.
+const MAX_WELCOME_BYTES: usize = 16 * 1024;
 /// A wallpaper is a picture; anything bigger than this is not one the admin meant to use.
 const MAX_WALLPAPER_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Applies the computer name, the wallpaper and the Firefox bookmarks and home page.
+/// Applies the computer name, the wallpaper, the Firefox bookmarks and home page and the welcome text.
 ///
 /// # Errors
 /// Fails when a file cannot be written, or the Firefox policies file is not valid JSON.
@@ -31,7 +37,8 @@ pub fn apply_branding(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let config = &loaded.config;
     apply_computer_name(root, config)?;
     apply_wallpaper(root, config)?;
-    apply_firefox(root, config)
+    apply_firefox(root, config)?;
+    apply_welcome(root, config)
 }
 
 fn apply_computer_name(root: &Root, config: &StickConfig) -> Result<(), Error> {
@@ -159,6 +166,33 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
         .map_err(|e| Error::PoliciesUnreadable(e.to_string()))?;
     output.push('\n');
     write(root, FIREFOX_POLICIES, output.as_bytes(), 0o644)
+}
+
+/// Writes the welcome text and its title, or takes them away when the admin chose no text, so a
+/// text from an earlier boot does not stay.
+fn apply_welcome(root: &Root, config: &StickConfig) -> Result<(), Error> {
+    let branding = &config.settings.branding;
+    let text = branding.welcome_text.trim();
+    if text.len() > MAX_WELCOME_BYTES {
+        tracing::warn!("the welcome text is longer than {MAX_WELCOME_BYTES} bytes; not shown");
+    }
+    if text.is_empty() || text.len() > MAX_WELCOME_BYTES {
+        remove(root, WELCOME_TEXT)?;
+        return remove(root, WELCOME_TITLE);
+    }
+    // The title is one line: the first line of the display name, or a plain "Welcome".
+    let title = branding.display_name.lines().next().unwrap_or("").trim();
+    let title = if title.is_empty() { "Welcome" } else { title };
+    write(root, WELCOME_TEXT, format!("{text}\n").as_bytes(), 0o644)?;
+    write(root, WELCOME_TITLE, format!("{title}\n").as_bytes(), 0o644)
+}
+
+fn remove(root: &Root, absolute: &str) -> Result<(), Error> {
+    match fs::remove_file(root.path(absolute)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(format!("removing {absolute}"), e)),
+    }
 }
 
 #[cfg(test)]

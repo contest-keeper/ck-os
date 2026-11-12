@@ -37,6 +37,10 @@ pub struct Applied {
     /// The titles of the Firefox bookmarks, in order.
     pub firefox_bookmarks: Vec<String>,
     pub firefox_home_page: Option<String>,
+    /// The welcome text the machine will show, with surrounding blanks removed.
+    pub welcome_text: Option<String>,
+    /// Whether the picture the admin chose is the machine's team wallpaper, byte for byte.
+    pub wallpaper_is_team_wallpaper: Option<bool>,
 }
 
 /// What `systemctl is-active` and `is-enabled` say about one service.
