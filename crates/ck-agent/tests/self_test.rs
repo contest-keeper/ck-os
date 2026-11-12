@@ -61,7 +61,15 @@ fn reports_what_apply_config_wrote_and_never_the_secret() {
     assert!(report.applied.config_hash_matches);
     assert!((report.uptime_seconds - 41.5).abs() < f64::EPSILON);
     let names: Vec<&str> = report.units.iter().map(|u| u.name.as_str()).collect();
-    assert_eq!(names, ["ck-config", "ck-recorder", "icpc-screen-record"]);
+    assert_eq!(
+        names,
+        [
+            "ck-config",
+            "ck-recorder",
+            "ck-uplink",
+            "icpc-screen-record"
+        ]
+    );
     assert!(!String::from_utf8_lossy(&result.stdout).contains("the-secret-token"));
 }
 
