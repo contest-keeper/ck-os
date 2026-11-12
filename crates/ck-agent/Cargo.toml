@@ -8,3 +8,12 @@ rust-version.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+ck-agent-config = { path = "../ck-agent-config" }
+clap = { version = "4.5.51", features = ["derive"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
