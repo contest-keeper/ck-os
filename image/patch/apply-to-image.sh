@@ -52,6 +52,7 @@ queue_disabled_services "$patch_directory/mask-units.txt" "$commands_file"
 queue_removed_files "$patch_directory/remove-files.txt" "$commands_file"
 queue_enabled_service ck-recorder.service graphical.target "$commands_file"
 queue_enabled_service ck-config.service multi-user.target "$commands_file"
+queue_enabled_service ck-selftest.service multi-user.target "$commands_file"
 queue_efi_permissions "$filesystem" "$work_directory" "$commands_file"
 
 # 4. Apply the command list to the image.
@@ -65,6 +66,7 @@ verify_disabled_services "$patch_directory/mask-units.txt" "$filesystem" || veri
 verify_removed_files "$patch_directory/remove-files.txt" "$filesystem" || verification_failed=1
 verify_enabled_service ck-recorder.service graphical.target "$filesystem" || verification_failed=1
 verify_enabled_service ck-config.service multi-user.target "$filesystem" || verification_failed=1
+verify_enabled_service ck-selftest.service multi-user.target "$filesystem" || verification_failed=1
 verify_efi_permissions "$filesystem" || verification_failed=1
 verify_filesystem "$filesystem" "$work_directory" || verification_failed=1
 
