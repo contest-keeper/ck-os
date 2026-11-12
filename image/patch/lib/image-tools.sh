@@ -199,7 +199,10 @@ queue_efi_permissions() {
   if grep -q '/boot/efi.*umask=0077' "$fstab_file"; then
     queue_image_file "$fstab_file" /etc/fstab 0100644 "$commands_file"
   else
-    echo "Warning: could not find the /boot/efi line in /etc/fstab; left unchanged" >&2
+    # Fail closed: without this the stick key would stay readable by every user on the machine.
+    echo "ERROR: no '/boot/efi vfat defaults' line in /etc/fstab, so the EFI partition cannot be" \
+      "made root-only; /etc/fstab left unchanged and nothing was applied" >&2
+    return 1
   fi
 }
 
@@ -308,7 +311,12 @@ verify_efi_permissions() {
   # The EFI partition holds the stick key, so its mount entry must be root-only.
   efi_entry=$(debugfs -R "cat /etc/fstab" "$filesystem" 2>/dev/null |
     grep -E '^[^#]*[[:space:]]/boot/efi[[:space:]]' || true)
-  if [[ -n "$efi_entry" && "$efi_entry" != *umask=0077* ]]; then
+  # A missing entry is as bad as a wrong one: the image would not mount the settings root-only.
+  if [[ -z "$efi_entry" ]]; then
+    echo "INSECURE /boot/efi has no entry in /etc/fstab"
+    return 1
+  fi
+  if [[ "$efi_entry" != *umask=0077* ]]; then
     echo "INSECURE /boot/efi is not root-only in /etc/fstab"
     return 1
   fi

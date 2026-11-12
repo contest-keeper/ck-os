@@ -47,7 +47,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 The tests use Python's standard library and simulated filesystem tools; they do
-not modify a real image. The patch steps are in `image/patch/apply-to-image.sh`,
+not modify a real image. The patch changes the image file itself, so it refuses to run
+unless you pass `--in-place`: work on a copy and never on the original. The patch steps are in `image/patch/apply-to-image.sh`,
 with low-level filesystem helpers in `image/patch/lib/image-tools.sh`.
 
 The reference patch has not been validated as a complete Keeper OS image.

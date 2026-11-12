@@ -9,6 +9,10 @@ pub enum Error {
     SettingsMissing(String),
     #[error("the settings file is not valid: {0}")]
     SettingsUnreadable(String),
+    #[error("the settings file is larger than {0} bytes")]
+    SettingsTooLarge(u64),
+    #[error("the {0} must be one line of text without control characters")]
+    SettingsText(&'static str),
     #[error("the settings have problems: {}", join(.0))]
     SettingsInvalid(Vec<Problem>),
     #[error("{context}: {source}")]

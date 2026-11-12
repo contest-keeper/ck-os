@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use ck_protocol::Settings;
 
@@ -19,6 +20,10 @@ const GENERATED: &str = "# Written at boot by ck-agent from the admin tool setti
 
 /// Applies the settings that need no restart of anything: the root-only copy of the settings and
 /// its hash, team and site, the recorder settings and the proxy allowlist.
+///
+/// Each file is replaced on its own, so a crash part-way leaves a mix of old and new files. That is
+/// fine because the agent runs this at every boot and every step overwrites its file: the next
+/// run brings all of them in line.
 ///
 /// # Errors
 /// Fails when a file cannot be written.
@@ -77,42 +82,77 @@ fn recording_conf(settings: &Settings) -> String {
     conf
 }
 
-/// One site per line with a leading dot, so Squid also allows the subdomains.
+/// One site per line with a leading dot, so Squid also allows the subdomains. Names are lowercased
+/// and each one is listed once.
 fn allowlist(settings: &Settings) -> Option<String> {
-    let sites = &settings.network.allowed_domains;
+    let mut sites: Vec<String> = Vec::new();
+    for site in &settings.network.allowed_domains {
+        let site = site.trim_start_matches('.').to_ascii_lowercase();
+        if !sites.contains(&site) {
+            sites.push(site);
+        }
+    }
     if sites.is_empty() {
         return None;
     }
     let mut list = GENERATED.to_owned();
     for site in sites {
-        let _ = writeln!(list, ".{}", site.trim_start_matches('.'));
+        let _ = writeln!(list, ".{site}");
     }
     Some(list)
 }
 
-/// Replaces the file in one step, so a crash never leaves a half-written file.
+/// Replaces the file in one step, so a crash never leaves a half-written file: the content goes to
+/// a new file next to it, is flushed to disk, and is then renamed over the old one.
 fn write(root: &Root, absolute: &str, content: &[u8], mode: u32) -> Result<(), Error> {
     let path = root.path(absolute);
-    let describe = |action: &str| format!("{action} {absolute}");
-    if let Some(folder) = path.parent() {
-        fs::create_dir_all(folder).map_err(|e| Error::io(describe("creating the folder of"), e))?;
+    let folder = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(folder)
+        .map_err(|e| Error::io(format!("creating the folder of {absolute}"), e))?;
+
+    let mut temporary_name = path.as_os_str().to_owned();
+    temporary_name.push(".ck-tmp");
+    let temporary = PathBuf::from(temporary_name);
+
+    let result =
+        write_new_file(&temporary, content, mode).and_then(|()| fs::rename(&temporary, &path));
+    if let Err(e) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(Error::io(format!("writing {absolute}"), e));
     }
-    let temporary = path.with_extension("ck-tmp");
-    fs::write(&temporary, content).map_err(|e| Error::io(describe("writing"), e))?;
-    set_mode(&temporary, mode).map_err(|e| Error::io(describe("setting permissions of"), e))?;
-    fs::rename(&temporary, &path).map_err(|e| Error::io(describe("replacing"), e))?;
+    sync_folder(folder);
     Ok(())
 }
 
+/// Writes a new file that has its final `mode` from the start, so a root-only file is never readable
+/// by anyone else, not even for a moment. A leftover from an interrupted run is replaced.
+fn write_new_file(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
+    let _ = fs::remove_file(path);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    set_creation_mode(&mut options, mode);
+    let mut file = options.open(path)?;
+    file.write_all(content)?;
+    file.sync_all()
+}
+
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+fn set_creation_mode(options: &mut OpenOptions, mode: u32) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(mode);
 }
 
 // Permissions only exist on the stick (Linux); this keeps the crate building on Windows.
 #[cfg(not(unix))]
-#[allow(clippy::unnecessary_wraps)]
-fn set_mode(_path: &Path, _mode: u32) -> std::io::Result<()> {
-    Ok(())
+fn set_creation_mode(_options: &mut OpenOptions, _mode: u32) {}
+
+/// Makes the rename survive a power loss. Best effort: not every system can flush a folder.
+#[cfg(unix)]
+fn sync_folder(folder: &Path) {
+    if let Ok(handle) = fs::File::open(folder) {
+        let _ = handle.sync_all();
+    }
 }
+
+#[cfg(not(unix))]
+fn sync_folder(_folder: &Path) {}
