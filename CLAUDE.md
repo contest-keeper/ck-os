@@ -14,6 +14,7 @@ Run before committing: cargo fmt --all; cargo clippy --all-targets -- -D warning
 
 ## Rules
 
+- Keep code simple and easy to review: plain loops, `if let` and `match` over long closure chains, short functions, one error context per step, comments that say why. Prefer a well-known crate over hand-written security code. Add no feature, option or abstraction that was not asked for.
 - Create work branches (`feature/`, `fix/`, `chore/`, `docs/`, `epic/`) from `develop`.
   Open feature PRs into `develop`; only `develop` may be promoted to `main`.
   Never commit directly to `main` or `develop`. Feature PRs use squash merges;

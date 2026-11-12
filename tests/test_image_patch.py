@@ -146,7 +146,7 @@ class ImagePatchTests(unittest.TestCase):
 
     def run_patch(self, **environment):
         before = self.image.read_bytes()
-        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), str(self.image)],
+        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), "--in-place", str(self.image)],
                                 env=dict(self.environment, **environment), capture_output=True, text=True)
         self.assertEqual(self.image.read_bytes(), before, "Test attempted to modify an image")
         return result
@@ -238,16 +238,26 @@ class ImagePatchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("left unchanged", result.stderr)
 
+    def test_refuses_to_run_without_the_in_place_confirmation(self):
+        before = self.image.read_bytes()
+        result = subprocess.run(["bash", str(self.patch / "apply-to-image.sh"), str(self.image)],
+                                env=self.environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("COPY", result.stderr)
+        self.assertEqual(self.image.read_bytes(), before)
+        self.assertFalse(self.calls_file.exists() and self.calls_file.read_text().strip())
+
     def test_fails_when_filesystem_check_fails(self):
         result = self.run_patch(FAIL_FSCK="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Simulated filesystem check failure", result.stdout)
 
-    def test_warns_without_replacing_unrecognized_efi_configuration(self):
+    def test_fails_without_replacing_unrecognized_efi_configuration(self):
+        # A missing /boot/efi entry must fail: otherwise the stick key stays world-readable.
         result = self.run_patch(FAKE_FSTAB="UUID=example / ext4 defaults 0 1\n")
-        self.assertEqual(result.returncode, 0)
+        self.assertNotEqual(result.returncode, 0)
         self.assertIn("left unchanged", result.stderr)
-        self.assertNotIn("/etc/fstab", json.loads(self.state_file.read_text())["files"])
+        self.assertNotIn("/etc/fstab", json.loads(self.state_file.read_text()).get("files", {}))
 
 
 if __name__ == "__main__":

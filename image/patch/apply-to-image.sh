@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Apply the Keeper files and settings to a COPY of the contest image.
-# Usage: bash apply-to-image.sh <image.img>
+# Usage: bash apply-to-image.sh --in-place <image.img>   (the file is modified: pass a copy)
 # Requires Bash, debugfs, e2fsck and sfdisk. On Windows, run through WSL.
 set -euo pipefail
 
-image_file=${1:?usage: apply-to-image.sh <image.img>}
+usage="usage: apply-to-image.sh --in-place <image.img>"
+# The patch changes the image file itself. Never run it on the original image: make a copy
+# first, and pass --in-place to confirm that the file you name is that copy.
+if [[ "${1:-}" != --in-place ]]; then
+  echo "$usage" >&2
+  echo "Refusing to run: this changes the image file itself. Work on a COPY of the image" \
+    "and pass --in-place to confirm." >&2
+  exit 2
+fi
+shift
+image_file=${1:?$usage}
 patch_directory=$(cd "$(dirname "$0")" && pwd)
 
 # Keep the low-level filesystem commands separate from the steps below.
