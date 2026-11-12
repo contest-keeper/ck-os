@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Shows the admin's welcome text in a window when the desktop starts.
+# ck-agent writes the text and the title at boot; with no text there is nothing to show.
+set -eu
+
+text=/etc/ck/welcome.txt
+title_file=/etc/ck/welcome-title
+
+[[ -s "$text" ]] || exit 0
+title=Welcome
+if [[ -s "$title_file" ]]; then
+  title=$(head -n 1 "$title_file")
+fi
+exec zenity --text-info --title="$title" --filename="$text" --width=640 --height=420

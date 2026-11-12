@@ -99,6 +99,8 @@ fn applied(root: &Path) -> Applied {
         running_hostname: read_trimmed(root, "proc/sys/kernel/hostname"),
         firefox_bookmarks,
         firefox_home_page,
+        welcome_text: read_trimmed(root, "etc/ck/welcome.txt"),
+        wallpaper_is_team_wallpaper: wallpaper_matches(root),
     }
 }
 
@@ -154,4 +156,15 @@ fn firefox(root: &Path) -> (Vec<String>, Option<String>) {
         .and_then(|u| u.as_str())
         .map(str::to_owned);
     (titles, home)
+}
+
+/// Whether the picture the settings name, which is on the EFI partition, is the team wallpaper the
+/// image shows. `None` when the settings name no wallpaper.
+fn wallpaper_matches(root: &Path) -> Option<bool> {
+    let config = fs::read(root.join("etc/ck/config.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&config).ok()?;
+    let name = json.get("branding")?.get("wallpaper")?.as_str()?.to_owned();
+    let on_stick = fs::read(root.join("boot/efi/ck").join(&name)).ok();
+    let shown = fs::read(root.join("icpc/teamWallpaper.png")).ok();
+    Some(on_stick.is_some() && on_stick == shown)
 }

@@ -181,3 +181,38 @@ fn a_broken_policies_file_is_reported_and_left_as_it_is() {
     assert!(matches!(apply(&root), Err(Error::PoliciesUnreadable(_))));
     assert_eq!(fs::read_to_string(file).expect("read"), "{ not json");
 }
+
+#[test]
+fn writes_the_welcome_text_and_title_and_takes_them_away_when_none_is_chosen() {
+    let branding = r#"{"display_name": "Spring Contest 2026\nsecond line", "welcome_text": "  Good luck!\nNo outside help.  "}"#;
+    let (dir, root) = stick(&settings(branding));
+    apply(&root).expect("apply");
+    assert_eq!(
+        read(&dir, "etc/ck/welcome.txt"),
+        "Good luck!\nNo outside help.\n"
+    );
+    assert_eq!(read(&dir, "etc/ck/welcome-title"), "Spring Contest 2026\n");
+
+    // The same stick is configured again with no text: the window must not show the old one.
+    fs::write(dir.path().join("boot/efi/ck/config.json"), settings("{}")).expect("new settings");
+    apply(&root).expect("apply again");
+    assert!(!dir.path().join("etc/ck/welcome.txt").exists());
+    assert!(!dir.path().join("etc/ck/welcome-title").exists());
+}
+
+#[test]
+fn the_title_is_welcome_without_a_display_name_and_a_huge_text_is_not_used() {
+    let (dir, root) = stick(&settings(r#"{"welcome_text": "Hello"}"#));
+    apply(&root).expect("apply");
+    assert_eq!(read(&dir, "etc/ck/welcome-title"), "Welcome\n");
+
+    let huge = "x".repeat(20_000);
+    let (dir, root) = stick(&settings(&format!(r#"{{"welcome_text": "{huge}"}}"#)));
+    apply(&root).expect("apply");
+    assert!(!dir.path().join("etc/ck/welcome.txt").exists());
+    assert_eq!(
+        read(&dir, "etc/hostname"),
+        "team-a-7\n",
+        "the rest is still applied"
+    );
+}

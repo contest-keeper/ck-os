@@ -73,6 +73,18 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
             applied.firefox_home_page.as_deref(),
         );
     }
+    let welcome = branding.welcome_text.trim();
+    if !welcome.is_empty() {
+        same(
+            &mut problems,
+            "welcome text",
+            Some(welcome),
+            applied.welcome_text.as_deref(),
+        );
+    }
+    if branding.wallpaper.is_some() && applied.wallpaper_is_team_wallpaper != Some(true) {
+        problems.push("the wallpaper on the stick is not the machine's team wallpaper".to_owned());
+    }
     if !applied.config_hash_matches {
         problems.push("the stored copy of the settings does not match its hash".to_owned());
     }
@@ -264,6 +276,25 @@ mod tests {
         report.applied.running_hostname = Some("team-a-7".to_owned());
         report.applied.firefox_bookmarks = vec!["Judge".to_owned()];
         report.applied.firefox_home_page = Some("https://judge.example/".to_owned());
+        assert_eq!(problems(&stick, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_welcome_text_and_the_wallpaper_are_checked_when_chosen() {
+        let mut stick = config();
+        stick.settings.branding.welcome_text = "  Good luck!  ".to_owned();
+        stick.settings.branding.wallpaper = Some("wall.png".to_owned());
+
+        let mut report = good_report();
+        report.applied.welcome_text = Some("Other".to_owned());
+        report.applied.wallpaper_is_team_wallpaper = Some(false);
+        let found = problems(&stick, &report);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().any(|p| p.starts_with("welcome text is")));
+        assert!(found.iter().any(|p| p.contains("wallpaper")));
+
+        report.applied.welcome_text = Some("Good luck!".to_owned());
+        report.applied.wallpaper_is_team_wallpaper = Some(true);
         assert_eq!(problems(&stick, &report), Vec::<String>::new());
     }
 }

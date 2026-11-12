@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Keeper welcome
+Comment=Shows the welcome text the admin chose
+Exec=/usr/local/bin/ck-welcome
+Terminal=false
+X-GNOME-Autostart-enabled=true
