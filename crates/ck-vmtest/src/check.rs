@@ -1,6 +1,6 @@
 //! Compares what the machine reported with what the stick's own settings say should happen.
 
-use ck_protocol::StickConfig;
+use ck_protocol::{Settings, StickConfig};
 use ck_selftest::Report;
 
 /// The reasons the machine does not match its settings. Empty means it matches.
@@ -89,23 +89,32 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
         problems.push("the stored copy of the settings does not match its hash".to_owned());
     }
 
+    check_services(&mut problems, settings, report);
+    problems
+}
+
+/// The states `systemctl` reported for the services the stick should run.
+fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Report) {
     let recording_on = settings.recording.mode.as_str() != "off";
+    unit(problems, report, "ck-config", Some("active"), "enabled");
     unit(
-        &mut problems,
-        report,
-        "ck-config",
-        Some("active"),
-        "enabled",
-    );
-    unit(
-        &mut problems,
+        problems,
         report,
         "ck-recorder",
         recording_on.then_some("active"),
         "enabled",
     );
-    unit(&mut problems, report, "icpc-screen-record", None, "masked");
-    problems
+    // With no server address the service has nothing to do and ends at once, so it is only
+    // expected to be running when the admin named a Hub.
+    let reports = !settings.api.url.is_empty();
+    unit(
+        problems,
+        report,
+        "ck-uplink",
+        reports.then_some("active"),
+        "enabled",
+    );
+    unit(problems, report, "icpc-screen-record", None, "masked");
 }
 
 fn same(problems: &mut Vec<String>, what: &str, expected: Option<&str>, actual: Option<&str>) {
@@ -201,6 +210,7 @@ mod tests {
             units: vec![
                 state("ck-config", "active", "enabled"),
                 state("ck-recorder", "active", "enabled"),
+                state("ck-uplink", "inactive", "enabled"),
                 state("icpc-screen-record", "inactive", "masked"),
             ],
         }
@@ -218,7 +228,7 @@ mod tests {
         report.applied.allowed_domains = vec!["example.org".to_owned()];
         report.applied.config_hash_matches = false;
         report.units[1].active = "failed".to_owned();
-        report.units[2].enabled = "enabled".to_owned();
+        report.units[3].enabled = "enabled".to_owned();
         let found = problems(&config(), &report);
         assert_eq!(found.len(), 5, "{found:?}");
         assert!(found.iter().any(|p| p.starts_with("team is")));
@@ -296,5 +306,26 @@ mod tests {
         report.applied.welcome_text = Some("Good luck!".to_owned());
         report.applied.wallpaper_is_team_wallpaper = Some(true);
         assert_eq!(problems(&stick, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_uplink_must_run_only_when_a_server_is_named() {
+        // The default settings name no server: a service that has stopped is right.
+        assert_eq!(problems(&config(), &good_report()), Vec::<String>::new());
+
+        let mut stick = config();
+        "http://10.0.2.2:8088".clone_into(&mut stick.settings.api.url);
+        let found = problems(&stick, &good_report());
+        assert_eq!(found, ["ck-uplink is inactive, expected active"]);
+
+        let mut report = good_report();
+        report.units[2].active = "active".to_owned();
+        assert_eq!(problems(&stick, &report), Vec::<String>::new());
+
+        report.units[2].enabled = "disabled".to_owned();
+        assert_eq!(
+            problems(&stick, &report),
+            ["ck-uplink is disabled, expected enabled"]
+        );
     }
 }
