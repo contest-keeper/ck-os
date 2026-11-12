@@ -1,6 +1,7 @@
 use std::fs;
 
 use ck_agent_config::{Error, Root, apply_basics, load};
+use ck_protocol::Problem;
 use tempfile::TempDir;
 
 const SETTINGS: &str = r#"{
@@ -114,11 +115,17 @@ fn refuses_team_and_site_that_are_not_one_line() {
     // JSON allows "\n" escapes, so a settings file can carry a line break inside a name.
     let with_break = SETTINGS.replace(r#""team": " Team A ""#, r#""team": "A\nB""#);
     let (_dir, root) = stick(&with_break);
-    assert!(matches!(load(&root), Err(Error::SettingsText("team"))));
+    assert!(matches!(
+        load(&root),
+        Err(Error::SettingsInvalid(p)) if p == [Problem::IdentityTextInvalid("team")]
+    ));
 
     let blank = SETTINGS.replace(r#""site": "Lab 1""#, r#""site": "  ""#);
     let (_dir, root) = stick(&blank);
-    assert!(matches!(load(&root), Err(Error::SettingsText("site"))));
+    assert!(matches!(
+        load(&root),
+        Err(Error::SettingsInvalid(p)) if p == [Problem::IdentityTextInvalid("site")]
+    ));
 }
 
 #[test]
