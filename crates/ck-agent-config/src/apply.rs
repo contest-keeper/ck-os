@@ -104,7 +104,7 @@ fn allowlist(settings: &Settings) -> Option<String> {
 
 /// Replaces the file in one step, so a crash never leaves a half-written file: the content goes to
 /// a new file next to it, is flushed to disk, and is then renamed over the old one.
-fn write(root: &Root, absolute: &str, content: &[u8], mode: u32) -> Result<(), Error> {
+pub(crate) fn write(root: &Root, absolute: &str, content: &[u8], mode: u32) -> Result<(), Error> {
     let path = root.path(absolute);
     let folder = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(folder)

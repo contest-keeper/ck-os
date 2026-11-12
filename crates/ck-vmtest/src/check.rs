@@ -127,6 +127,7 @@ mod tests {
             stick_id: StickId::parse("03c9f556").expect("id"),
             created_at: "2026-11-10T15:22".parse::<LocalDateTime>().expect("time"),
             token: Token::new("secret"),
+            machine_number: None,
             settings,
         }
     }
