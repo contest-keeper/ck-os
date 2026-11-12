@@ -2,3 +2,6 @@
 
 # D-Bus alias of the masked ModemManager service
 /etc/systemd/system/dbus-org.freedesktop.ModemManager1.service
+
+# Script of the contest's own screen recorder
+/icpc/scripts/screen-record

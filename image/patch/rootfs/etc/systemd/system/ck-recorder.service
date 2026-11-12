@@ -2,7 +2,7 @@
 Description=Keeper OS: contest screen recording (mode set by the admin tool)
 # The recorder reads /etc/ck/recording.conf once at start, so it must start after the agent has
 # written it. (Ordering against a unit that is not installed has no effect.)
-After=display-manager.service ck-agent.service
+After=display-manager.service ck-config.service
 
 [Service]
 ExecStart=/usr/local/bin/ck-recorder

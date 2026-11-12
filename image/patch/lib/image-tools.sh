@@ -36,6 +36,20 @@ prepare_payload() {
   find "$payload_directory" -type f -exec sed -i 's/\r$//' {} +
 }
 
+add_agent_binary() {
+  local agent_file=$1
+  local payload_directory=$2
+  # A Linux program starts with the bytes 7f 'E' 'L' 'F'. This catches a wrong file, such as the
+  # Windows build, before anything is written to the image.
+  if [[ ! -s "$agent_file" || "$(head -c 4 "$agent_file" | od -An -tx1 | tr -d ' 
+')" != 7f454c46 ]]; then
+    echo "$agent_file is not a Linux program. Build it with tools/build-agent.ps1." >&2
+    return 1
+  fi
+  mkdir -p "$payload_directory/usr/local/bin"
+  cp "$agent_file" "$payload_directory/usr/local/bin/ck-agent"
+}
+
 list_payload_paths() {
   local payload_directory=$1
   local file_type=$2
@@ -109,7 +123,7 @@ payload_file_mode() {
   local image_path=$1
   # Mode 0644 allows only the owner to write; 0755 also allows execution.
   case "$image_path" in
-    /usr/local/bin/ck-recorder)
+    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent)
       printf '0100755\n'
       ;;
     *)
