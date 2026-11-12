@@ -35,8 +35,8 @@ fn applies_the_settings_to_the_system_files() {
 
     assert_eq!(read(&dir, "etc/ck/config.json"), SETTINGS);
     assert_eq!(read(&dir, "etc/ck/config.sha256").trim(), loaded.sha256);
-    assert_eq!(read(&dir, "icpc/TEAM"), "Team A\n");
-    assert_eq!(read(&dir, "icpc/SITE"), "Lab 1\n");
+    assert_eq!(read(&dir, "etc/ck/team"), "Team A\n");
+    assert_eq!(read(&dir, "etc/ck/site"), "Lab 1\n");
 
     let recording = read(&dir, "etc/ck/recording.conf");
     for line in [
