@@ -426,3 +426,43 @@ fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
     assert!(matches!(refused, Err(Error::Queue(_))), "{refused:?}");
     assert_eq!(queue.pending().expect("pending").len(), 2);
 }
+
+#[test]
+fn a_restart_in_the_same_boot_carries_on_the_heartbeat_sequence_and_a_new_boot_starts_at_1() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://127.0.0.1:1");
+    let mut first = Uplink::load(dir.path()).expect("load");
+    assert_eq!(
+        first.next_heartbeat(time(), RecorderState::Recording).seq,
+        1
+    );
+    assert_eq!(
+        first.next_heartbeat(time(), RecorderState::Recording).seq,
+        2
+    );
+
+    // The service restarts: a new Uplink in the same boot goes on from 3, so the Hub keeps
+    // accepting heartbeats.
+    let mut restarted = Uplink::load(dir.path()).expect("reload");
+    assert_eq!(
+        restarted
+            .next_heartbeat(time(), RecorderState::Recording)
+            .seq,
+        3
+    );
+
+    // A reboot gives a new boot id, and the sequence starts again at 1.
+    fs::write(
+        dir.path().join("proc/sys/kernel/random/boot_id"),
+        "a-different-boot
+",
+    )
+    .expect("new boot");
+    let mut rebooted = Uplink::load(dir.path()).expect("after reboot");
+    assert_eq!(
+        rebooted
+            .next_heartbeat(time(), RecorderState::Recording)
+            .seq,
+        1
+    );
+}
