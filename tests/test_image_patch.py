@@ -122,6 +122,7 @@ class ImagePatchTests(unittest.TestCase):
         self.write_payload("etc/ck/image-version", b"test-image\n")
         self.write_payload("usr/local/bin/ck-recorder", b"#!/usr/bin/env bash\necho example\n")
         self.write_payload("usr/local/bin/ck-welcome", b"#!/usr/bin/env bash\necho example\n")
+        self.write_payload("icpc/scripts/set_wallpaper.sh", b"#!/bin/bash\necho example\n")
         # A program with bytes that text handling would damage: a Windows line ending and a NUL.
         self.agent = self.directory / "ck-agent"
         self.agent.write_bytes(b"\x7fELF\x02\x01\r\n\x00\xff end")
@@ -165,6 +166,7 @@ class ImagePatchTests(unittest.TestCase):
         commands = self.commands_file.read_text()
         self.assertIn("sif /usr/local/bin/ck-recorder mode 0100755\n", commands)
         self.assertIn("sif /usr/local/bin/ck-welcome mode 0100755\n", commands)
+        self.assertIn("sif /icpc/scripts/set_wallpaper.sh mode 0100755\n", commands)
         self.assertIn("sif /etc/ck/config.conf mode 0100644\n", commands)
         self.assertIn("sif /etc/ck/config.conf uid 0\n", commands)
         self.assertIn("sif /etc/ck/config.conf gid 0\n", commands)

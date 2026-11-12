@@ -18,7 +18,8 @@ use crate::root::Root;
 const HOSTNAME: &str = "/etc/hostname";
 const HOSTS: &str = "/etc/hosts";
 const EFI_FOLDER: &str = "/boot/efi/ck";
-/// The image's own `firstLogin.sh` shows this file when it exists and its default wallpaper otherwise.
+/// The patched `set_wallpaper.sh`, which the desktop runs at login, shows this file when it exists
+/// and the image's default wallpaper otherwise.
 const TEAM_WALLPAPER: &str = "/icpc/teamWallpaper.png";
 const FIREFOX_POLICIES: &str = "/usr/lib/firefox/distribution/policies.json";
 /// `ck-welcome`, which the image starts with the desktop, shows these two files when the text exists.
