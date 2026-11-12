@@ -12,8 +12,8 @@ use crate::root::Root;
 const CONFIG_COPY: &str = "/etc/ck/config.json";
 const CONFIG_HASH: &str = "/etc/ck/config.sha256";
 const RECORDING_CONF: &str = "/etc/ck/recording.conf";
-const TEAM: &str = "/icpc/TEAM";
-const SITE: &str = "/icpc/SITE";
+const TEAM: &str = "/etc/ck/team";
+const SITE: &str = "/etc/ck/site";
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
 
 const GENERATED: &str = "# Written at boot by ck-agent from the admin tool settings\n";
