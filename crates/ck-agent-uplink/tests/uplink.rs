@@ -242,15 +242,32 @@ fn missing_or_broken_settings_are_explained() {
 
 #[test]
 fn the_recorder_state_follows_the_mode_and_the_service() {
-    assert_eq!(recorder_state(RecordingMode::Off, true), RecorderState::Off);
+    let dir = tempfile::tempdir().expect("dir");
+    let root = dir.path();
+    let state = root.join("run/ck-recorder/state");
+    fs::create_dir_all(state.parent().expect("parent")).expect("folder");
+
     assert_eq!(
-        recorder_state(RecordingMode::Low, true),
-        RecorderState::Recording
+        recorder_state(root, RecordingMode::Off, true),
+        RecorderState::Off
     );
     assert_eq!(
-        recorder_state(RecordingMode::Standard, false),
+        recorder_state(root, RecordingMode::Standard, false),
         RecorderState::Waiting
     );
+    // An active service that says nothing, or says it waits, is not recording.
+    for (written, expected) in [
+        (None, RecorderState::Waiting),
+        (Some("waiting"), RecorderState::Waiting),
+        (Some("recording"), RecorderState::Recording),
+        (Some("lowdisk"), RecorderState::LowDisk),
+    ] {
+        match written {
+            Some(text) => fs::write(&state, format!("{text}\n")).expect("write"),
+            None => drop(fs::remove_file(&state)),
+        }
+        assert_eq!(recorder_state(root, RecordingMode::Low, true), expected);
+    }
 }
 
 fn sha(bytes: &[u8]) -> String {
@@ -462,4 +479,50 @@ fn a_restart_in_the_same_boot_carries_on_the_heartbeat_sequence_and_a_new_boot_s
             .seq,
         1
     );
+}
+
+#[test]
+fn an_event_the_hub_refuses_for_good_is_set_aside_and_the_next_one_is_sent() {
+    let hub = fake_hub(vec![400, 200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    push(&queue, &uplink, "ana");
+    push(&queue, &uplink, "bob");
+    let url = uplink.events_url().expect("url");
+
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 1);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+    let refused = fs::read_dir(dir.path().join("queue"))
+        .expect("queue")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "refused"))
+        .count();
+    assert_eq!(refused, 1, "kept for the organizer, out of the way");
+}
+
+#[test]
+fn a_crash_between_the_state_and_the_event_leaves_a_gap_not_a_reused_number() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://127.0.0.1:1");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue_dir = dir.path().join("queue");
+    let queue = Queue::open(&queue_dir).expect("open");
+    push(&queue, &uplink, "ana");
+    // The crash: the state moved on to event 2 but its file was never written.
+    let state = fs::read_to_string(queue_dir.join("state.json")).expect("state");
+    let moved = state.replace("\"counter\":1", "\"counter\":2");
+    assert_ne!(state, moved, "the state names the counter");
+    fs::write(queue_dir.join("state.json"), moved).expect("write");
+
+    let next = push(&queue, &uplink, "bob");
+    let files: Vec<u64> = queue
+        .pending()
+        .expect("pending")
+        .iter()
+        .map(|(counter, _)| *counter)
+        .collect();
+    assert_eq!(files, [1, 3], "the first event is not overwritten");
+    assert_eq!(next.seq, 2);
 }

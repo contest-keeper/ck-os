@@ -152,7 +152,7 @@ impl Uplink {
     /// were sent.
     ///
     /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
-    /// sent. An error is returned only when nothing was sent; events not sent stay in the queue.
+    /// sent. A 400, 413 or 422 means it never will: the event is set aside as `.refused`. An error is returned only when nothing was sent; events not sent stay in the queue.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
         for (counter, event) in queue.pending()? {
@@ -160,6 +160,14 @@ impl Uplink {
                 Ok(()) | Err(Error::Rejected(409)) => {
                     queue.remove(counter)?;
                     sent += 1;
+                }
+                // The Hub will never take this one; keeping it would block every later event.
+                Err(Error::Rejected(status @ (400 | 413 | 422))) => {
+                    tracing::warn!(
+                        status,
+                        "the Hub refuses an event for good; setting it aside"
+                    );
+                    queue.set_aside(counter)?;
                 }
                 Err(error) => return if sent == 0 { Err(error) } else { Ok(sent) },
             }
@@ -190,17 +198,24 @@ impl Uplink {
     }
 }
 
+/// Where `ck-recorder` writes what it is doing: `waiting`, `recording` or `lowdisk`.
+pub const RECORDER_STATE_FILE: &str = "run/ck-recorder/state";
+
 /// What the recorder is doing, from the mode the admin chose and whether `ck-recorder` runs.
-/// "Waiting" covers the start delay and a recorder that has stopped; the agent cannot tell them
-/// apart from outside.
 #[must_use]
-pub fn recorder_state(mode: RecordingMode, service_active: bool) -> RecorderState {
+pub fn recorder_state(root: &Path, mode: RecordingMode, service_active: bool) -> RecorderState {
     if mode == RecordingMode::Off {
-        RecorderState::Off
-    } else if service_active {
-        RecorderState::Recording
-    } else {
-        RecorderState::Waiting
+        return RecorderState::Off;
+    }
+    if !service_active {
+        return RecorderState::Waiting;
+    }
+    // The service is active while it waits for its start time, so it says what it does itself. A
+    // recorder that says nothing is not claimed to record.
+    match read_trimmed(root, RECORDER_STATE_FILE).as_deref() {
+        Some("recording") => RecorderState::Recording,
+        Some("lowdisk") => RecorderState::LowDisk,
+        _ => RecorderState::Waiting,
     }
 }
 

@@ -86,15 +86,16 @@ impl Queue {
         state.last_seq = event.seq;
         state.last_hash = ck_crypto::sha256_hex(&event.canonical_bytes());
 
-        // The event first, then the state. A crash between the two repeats this sequence number
-        // with the same previous hash, and the file is simply written again.
-        write_atomically(
-            &self.dir.join(event_file(state.counter)),
-            &serde_json::to_vec(&event).expect("an event always serializes"),
-        )?;
+        // The state first, then the event. A crash between the two leaves a gap in the sequence,
+        // which the Hub shows as a warning. The other order would reuse the counter and the
+        // sequence for a different event, and one of the two would be lost without a trace.
         write_atomically(
             &self.dir.join(STATE_FILE),
             &serde_json::to_vec(&state).expect("the state always serializes"),
+        )?;
+        write_atomically(
+            &self.dir.join(event_file(state.counter)),
+            &serde_json::to_vec(&event).expect("an event always serializes"),
         )?;
         Ok(event)
     }
@@ -134,6 +135,13 @@ impl Queue {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(queue_error("removing a sent event", &e)),
         }
+    }
+
+    /// Keeps an event the Hub refuses for good out of the sending order, next to the queue.
+    pub fn set_aside(&self, counter: u64) -> Result<(), Error> {
+        let path = self.dir.join(event_file(counter));
+        fs::rename(&path, path.with_extension("refused"))
+            .map_err(|e| queue_error("setting a refused event aside", &e))
     }
 
     fn state(&self) -> Result<State, Error> {
