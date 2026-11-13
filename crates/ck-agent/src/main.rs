@@ -187,7 +187,7 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
         let running = self_test::systemctl_state("ck-recorder").active == "active";
         let heartbeat = uplink.next_heartbeat(
             chrono::Utc::now(),
-            recorder_state(uplink.recording_mode(), running),
+            recorder_state(root, uplink.recording_mode(), running),
         );
         let result = uplink.send(&url, &heartbeat);
         // Say it once when reporting starts to fail and once when it works again, not every 15 s.

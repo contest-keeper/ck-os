@@ -24,6 +24,9 @@ OUT=/var/lib/ck/recordings
 SEGMENT=600 # seconds per file
 MIN_FREE_MB=1500
 DISPLAY_NAME=:0
+# The agent reads this file to tell the Hub what the recorder is really doing (systemd creates the
+# folder; see ck-recorder.service).
+STATE_FILE=/run/ck-recorder/state
 # The contest image supplies this configuration at runtime.
 # shellcheck source=/dev/null
 [ -r "$CONF" ] && . "$CONF"
@@ -59,6 +62,11 @@ case "$MODE" in
     ;;
 esac
 
+set_state() {
+  echo "$1" >"$STATE_FILE" 2>/dev/null || true
+}
+
+set_state waiting
 mkdir -p "$OUT"
 chmod 700 "$OUT"
 export DISPLAY=$DISPLAY_NAME
@@ -105,10 +113,12 @@ while true; do
   free=$(df -Pm "$OUT" | awk 'NR==2{print $4}')
   if [ "${free:-0}" -lt "$MIN_FREE_MB" ]; then
     echo "screen-record: only ${free}MB free, not recording" >&2
+    set_state lowdisk
     sleep 60
     continue
   fi
 
+  set_state recording
   # A resolution change (e.g. a projector plugged in) ends the file; the loop starts a new one.
   if [ "$MODE" = snapshots ]; then
     mkdir -p "$OUT/snapshots"

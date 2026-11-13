@@ -21,6 +21,9 @@ ProtectHome=yes
 ProtectSystem=strict
 StateDirectory=ck/recordings
 StateDirectoryMode=0700
+# Where the recorder says whether it records, waits or stopped for low disk; kept over a restart.
+RuntimeDirectory=ck-recorder
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=graphical.target
