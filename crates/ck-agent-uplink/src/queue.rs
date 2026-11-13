@@ -39,9 +39,6 @@ pub struct Queue {
 
 impl Queue {
     /// Opens the queue in `dir`, creating the folder when it is not there.
-    ///
-    /// # Errors
-    /// Fails when the folder cannot be created.
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self, Error> {
         let dir = dir.into();
         fs::create_dir_all(&dir).map_err(|e| queue_error("creating the queue folder", &e))?;
@@ -49,10 +46,7 @@ impl Queue {
     }
 
     /// Adds an event to the end of the chain of this boot and returns it. A new boot starts a new
-    /// chain at sequence 1.
-    ///
-    /// # Errors
-    /// [`Error::Queue`] when the queue is full, the payload is too big, or the disk fails.
+    /// chain at sequence 1. Refused when the queue is full or the payload is too big.
     pub fn push(
         &self,
         stick_id: &StickId,
@@ -107,9 +101,6 @@ impl Queue {
 
     /// The waiting events, oldest first, each with the number of its file. A file that cannot be
     /// read is set aside as `.bad` so it does not block the ones after it.
-    ///
-    /// # Errors
-    /// Fails when the folder cannot be read.
     pub fn pending(&self) -> Result<Vec<(u64, Event)>, Error> {
         let mut found = Vec::new();
         let entries = fs::read_dir(&self.dir).map_err(|e| queue_error("reading the queue", &e))?;
@@ -136,10 +127,7 @@ impl Queue {
         Ok(found)
     }
 
-    /// Takes a sent event out of the queue.
-    ///
-    /// # Errors
-    /// Fails when the file cannot be removed.
+    /// Takes a sent event out of the queue. One that is already gone is fine.
     pub fn remove(&self, counter: u64) -> Result<(), Error> {
         match fs::remove_file(self.dir.join(event_file(counter))) {
             Ok(()) => Ok(()),

@@ -100,6 +100,15 @@ fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
 }
 
 #[test]
+fn the_settings_file_is_never_copied_out_as_the_wallpaper() {
+    // The settings file holds the stick's secret and the wallpaper is readable by everyone.
+    let (dir, root) = stick(&settings(r#"{"wallpaper": "config.json"}"#));
+    apply(&root).expect("apply");
+    assert!(!dir.path().join("icpc/teamWallpaper.png").exists());
+    assert_eq!(read(&dir, "etc/hostname"), "team-a-7\n");
+}
+
+#[test]
 fn a_missing_wallpaper_file_does_not_stop_the_other_settings() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "gone.png"}"#));
     fs::create_dir_all(dir.path().join("icpc")).expect("folder");

@@ -24,9 +24,6 @@ const GENERATED: &str = "# Written at boot by ck-agent from the admin tool setti
 /// Each file is replaced on its own, so a crash part-way leaves a mix of old and new files. That is
 /// fine because the agent runs this at every boot and every step overwrites its file: the next
 /// run brings all of them in line.
-///
-/// # Errors
-/// Fails when a file cannot be written.
 pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let settings = &loaded.config.settings;
 

@@ -1,7 +1,5 @@
-//! `ck-agent`: the program on the contest stick.
-//!
-//! For now it has one command, `apply-config`, which `ck-config.service` runs at every boot.
-//! Log lines go to stderr, where the journal collects them.
+//! `ck-agent`: the program on the contest stick. Each service of the image runs one of its
+//! commands. Log lines go to stderr, where the journal collects them.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -162,7 +160,7 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
         Ok(uplink) => uplink,
         // An unconfigured stick has nothing to report; stopping quietly keeps the service from
         // being restarted again and again.
-        Err(error @ ck_agent_uplink::Error::NoSettings(_)) => {
+        Err(error @ ck_agent_uplink::Error::NoSettings) => {
             tracing::info!("not reporting: {error}");
             return ExitCode::SUCCESS;
         }

@@ -40,7 +40,7 @@ pub struct Options {
 pub struct Machine {
     child: Child,
     qmp_port: u16,
-    pub serial_log: PathBuf,
+    serial_log: PathBuf,
 }
 
 impl Machine {
@@ -118,14 +118,12 @@ impl Machine {
         }
     }
 
-    /// The text the machine has written to its serial port so far.
     pub fn serial_text(&self) -> String {
         fs::read(&self.serial_log)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default()
     }
 
-    /// Saves what the screen shows as a PNG file.
     pub fn screenshot(&self, png_path: &Path) -> Result<(), Error> {
         let ppm_path = png_path.with_extension("ppm");
         let mut qmp = Qmp::connect(self.qmp_port)?;

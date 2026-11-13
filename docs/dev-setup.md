@@ -9,7 +9,8 @@ Rust projects in Contest Keeper build with the **GNU** toolchain, so no Visual S
 3. **Zig** (`winget install zig.zig`) and **cargo-zigbuild** (`cargo install cargo-zigbuild`): used to cross-compile the static Linux agent.
 4. **Targets**: `rustup target add x86_64-unknown-linux-musl x86_64-pc-windows-gnu`.
 5. **WSL (Ubuntu)** with `e2fsprogs`, `fdisk`, `python3` and `shellcheck`: runs the image patch and its tests.
-6. **QEMU** (later, A.8): VM tests of the image. Work on copies only; never touch the original image.
+6. **QEMU**: VM tests of the image, see [testing.md](testing.md). Work on copies only; never touch
+   the original image.
 
 ## Checks
 

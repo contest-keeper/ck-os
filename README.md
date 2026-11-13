@@ -1,59 +1,55 @@
 # Contest Keeper OS
 
 Keeper OS is the bootable contest environment for
-[Contest Keeper](https://github.com/contest-keeper). It extends an existing Linux
-contest image with a Rust agent that will report successful logins and submissions
-to Keeper Hub, helping organizers verify that submissions came from official
-contest machines.
+[Contest Keeper](https://github.com/contest-keeper). It extends an existing Linux contest image
+with a patch and a Rust agent, `ck-agent`, that applies the organizer's settings at boot and
+reports to Keeper Hub. Login and submission capture and the network lock are not built yet.
 
-## Scope
+Keeper OS targets x86-64 PCs booting from USB. Sticks are prepared with
+[Keeper Forge](https://github.com/contest-keeper/ck-forge), the server is
+[Keeper Hub](https://github.com/contest-keeper/ck-hub), and the shared types are in
+[ck-protocol](https://github.com/contest-keeper/ck-protocol).
 
-This repository will contain:
+## What is here
 
-- The agent that applies contest settings and sends signed events to Keeper Hub.
-- Login and submission capture through the contest image's proxy.
-- Image patches, boot services, and contest network restrictions.
-- Optional screen recording and tools for building and testing patched images.
-
-Keeper OS targets x86-64 PCs booting from USB. Contest settings are prepared with
-[Keeper Forge](https://github.com/contest-keeper/ck-forge); the server and organizer
-dashboard live in [Keeper Hub](https://github.com/contest-keeper/ck-hub). Shared
-types and utilities live in [ck-protocol](https://github.com/contest-keeper/ck-protocol).
-
-## Build and run
-
-Keeper OS is in early development. `image/patch/` contains the reference patch
-from the initial prototype: screen recording and boot fixes. It does not include
-the agent, so it is not a complete Keeper OS installation. Until the Rust agent
-exists, the recorder runs with its built-in defaults.
-
-The recorder service is `ck-recorder`, with settings under `/etc/ck/`. It runs
-from `/usr/local/bin/ck-recorder` and stores recordings in `/var/lib/ck/recordings/`.
-Legacy recorder names appear only in the lists that disable the base image's old
-service and remove its leftover recordings.
-
-The Rust agent, its `ck-config` and `ck-uplink` services, and supported build and
-installation instructions will be added as development progresses.
+- `crates/ck-agent`: the program on the stick. `apply-config` applies the settings from the EFI
+  partition (`ck-config.service`), `uplink` sends signed heartbeats and queued events
+  (`ck-uplink.service`), `self-test` reports what was applied, for the VM test.
+- `crates/ck-agent-config`, `crates/ck-agent-uplink`, `crates/ck-selftest`: the libraries behind
+  those commands.
+- `crates/ck-vmtest`: boots a stick image in QEMU and says PASS or FAIL.
+- `image/patch/`: the files added to the contest image (services, the recorder, the welcome
+  window) and the script that installs them and the agent into an image.
 
 Base images and virtual machine disks are not distributed in this repository.
 
-## Testing
+## Build and run
 
-The imported shell scripts are checked with Bash syntax validation and ShellCheck.
-On Linux or WSL, run the patch regression tests from the repository root:
+See [docs/dev-setup.md](docs/dev-setup.md) for the toolchain. The agent for the stick is a static
+Linux program:
 
-```sh
-python3 -m unittest discover -s tests -v
+```powershell
+pwsh tools/build-agent.ps1                                   # writes dist/ck-agent
+pwsh tools/patch-image.ps1 -Image C:\rcpc-test\copy.img      # a COPY of the contest image
 ```
 
-The tests use Python's standard library and simulated filesystem tools; they do
-not modify a real image. The patch changes the image file itself, so it refuses to run
-unless you pass `--in-place`: work on a copy and never on the original. The patch steps are in `image/patch/apply-to-image.sh`,
-with low-level filesystem helpers in `image/patch/lib/image-tools.sh`.
+The patch changes the image file itself, so `apply-to-image.sh` refuses to run without
+`--in-place`: work on a copy and never on the original. Images made so far are listed in
+[docs/base-images.md](docs/base-images.md).
 
-The reference patch has not been validated as a complete Keeper OS image.
-Planned verification includes Rust unit and integration tests, image checks,
-virtual machine boot tests, and checks on real contest hardware.
+## Testing
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+python3 -m unittest discover -s tests -v    # on Linux or WSL
+```
+
+The Python tests run the patch script against simulated filesystem tools; they do not modify a
+real image. Shell scripts are checked with ShellCheck. Booting a patched image in a virtual
+machine is described in [docs/testing.md](docs/testing.md); it needs the contest image and runs
+on a developer machine, not in CI. Real contest hardware has not been tested yet.
 
 ## Contributing
 

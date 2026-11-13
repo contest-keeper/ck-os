@@ -229,10 +229,7 @@ fn a_trailing_slash_in_the_server_address_is_not_doubled() {
 #[test]
 fn missing_or_broken_settings_are_explained() {
     let dir = TempDir::new().expect("temp dir");
-    assert!(matches!(
-        Uplink::load(dir.path()),
-        Err(Error::NoSettings(_))
-    ));
+    assert!(matches!(Uplink::load(dir.path()), Err(Error::NoSettings)));
 
     let file = dir.path().join("etc/ck/config.json");
     fs::create_dir_all(file.parent().expect("parent")).expect("folder");

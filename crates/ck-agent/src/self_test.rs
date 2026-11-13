@@ -21,7 +21,6 @@ const UNITS: [&str; 4] = [
 /// `-smbios type=11,value=ck-selftest=1`. A real stick never has it.
 const REQUEST: &[u8] = b"ck-selftest=1";
 
-/// Whether this machine was started as a test machine.
 pub fn requested(root: &Path) -> bool {
     let Ok(entries) = fs::read_dir(root.join("sys/firmware/dmi/entries")) else {
         return false;
@@ -138,7 +137,6 @@ fn allowed_domains(root: &Path) -> Vec<String> {
     sites
 }
 
-/// The bookmark titles and the home page from Firefox's policies file.
 fn firefox(root: &Path) -> (Vec<String>, Option<String>) {
     let text = fs::read_to_string(root.join("usr/lib/firefox/distribution/policies.json")).ok();
     let policies = text

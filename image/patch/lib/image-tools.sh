@@ -9,15 +9,15 @@ find_linux_partition() {
   local partition_table partition root_sector
   partition_table=$(sfdisk -d "$image_file")
 
-  # A partition line contains: start= 2048, size= ..., type=<partition type>.
+  # A partition line looks like: start= 2048, size= ..., type=<partition type>.
   while IFS= read -r partition; do
     if [[ "$partition" != *"type=$linux_partition_type"* || "$partition" != *"start="* ]]; then
       continue
     fi
 
-    root_sector=${partition#*start=}         # Keep the text after start=.
-    root_sector=${root_sector%%,*}           # Stop at the next comma.
-    root_sector=${root_sector//[[:space:]]/} # Remove padding spaces.
+    root_sector=${partition#*start=}
+    root_sector=${root_sector%%,*}
+    root_sector=${root_sector//[[:space:]]/}
     if [[ "$root_sector" =~ ^[0-9]+$ ]]; then
       printf '%s\n' "$root_sector"
       return 0
@@ -32,7 +32,7 @@ prepare_payload() {
   local source_directory=$1
   local payload_directory=$2
   cp -r "$source_directory" "$payload_directory"
-  # The current reference payload contains text files only.
+  # Only text files are here at this point; the agent binary is added afterwards.
   find "$payload_directory" -type f -exec sed -i 's/\r$//' {} +
 }
 
@@ -55,14 +55,12 @@ list_payload_paths() {
   local file_type=$2
   (
     cd "$payload_directory" || exit 1
-    # Paths are relative to the image root, for example /etc/ck/image-version.
     find . -mindepth 1 -type "$file_type" -printf '/%P\n' | sort
   )
 }
 
 read_manifest() {
   local manifest_file=$1
-  # Remove Windows line endings, comments, trailing spaces, then blank lines.
   sed \
     -e 's/\r$//' \
     -e 's/#.*//' \
@@ -73,7 +71,6 @@ read_manifest() {
 image_path_exists() {
   local filesystem=$1
   local image_path=$2
-  # debugfs reports an inode when the requested image path exists.
   debugfs -R "stat $image_path" "$filesystem" 2>/dev/null | grep -q '^Inode:'
 }
 
@@ -89,7 +86,6 @@ queue_missing_directories() {
       continue
     fi
 
-    # sif means "set inode field"; user 0 and group 0 are root.
     cat >>"$commands_file" <<COMMANDS
 mkdir $image_path
 sif $image_path uid 0
@@ -121,7 +117,6 @@ COMMANDS
 
 payload_file_mode() {
   local image_path=$1
-  # Mode 0644 allows only the owner to write; 0755 also allows execution.
   case "$image_path" in
     /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome | /icpc/scripts/set_wallpaper.sh)
       printf '0100755\n'
@@ -158,7 +153,6 @@ queue_disabled_service() {
   local service_name=$1
   local commands_file=$2
   local wants_directory
-  # Each folder contains links that start services for a particular boot stage.
   local wants_directories=(
     multi-user.target.wants
     graphical.target.wants
@@ -206,9 +200,7 @@ queue_efi_permissions() {
   local fstab_file="$work_directory/fstab"
   debugfs -R "dump /etc/fstab $fstab_file" "$filesystem" 2>/dev/null
 
-  # Match the EFI mount entry and replace its default permissions with umask=0077.
-  # The capture group preserves the mount path, filesystem type and spacing.
-  # This makes the EFI settings and stick key readable only by root.
+  # umask=0077 makes the EFI partition, which holds the settings and the stick key, root-only.
   sed -i 's#\(/boot/efi[[:space:]]\+vfat[[:space:]]\+\)defaults#\1umask=0077#' "$fstab_file"
   if grep -q '/boot/efi.*umask=0077' "$fstab_file"; then
     queue_image_file "$fstab_file" /etc/fstab 0100644 "$commands_file"
@@ -243,7 +235,6 @@ verify_payload() {
 
   while IFS= read -r image_path; do
     source_file="$payload_directory$image_path"
-    # Compare the file read from the image with the local file we installed.
     if ! cmp -s <(debugfs -R "cat $image_path" "$filesystem" 2>/dev/null) "$source_file"; then
       echo "MISMATCH $image_path"
       verification_failed=1
