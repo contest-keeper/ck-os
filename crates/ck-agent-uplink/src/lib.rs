@@ -29,16 +29,12 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("there are no settings at /{0}; the agent has not applied them yet")]
-    NoSettings(&'static str),
+    #[error("there are no settings at /{CONFIG_COPY}; the agent has not applied them yet")]
+    NoSettings,
     #[error("the settings at /{CONFIG_COPY} are not valid: {0}")]
     BadSettings(String),
-    #[error("cannot read /{path}: {source}")]
-    Io {
-        path: &'static str,
-        #[source]
-        source: std::io::Error,
-    },
+    #[error("cannot read /{CONFIG_COPY}: {0}")]
+    Io(#[source] std::io::Error),
     #[error("the Hub did not accept the heartbeat: HTTP {0}")]
     Rejected(u16),
     #[error("cannot reach the Hub: {0}")]
@@ -57,18 +53,12 @@ pub struct Uplink {
 
 impl Uplink {
     /// Reads the settings the agent applied. `root` is `/` on the stick, a folder in tests.
-    ///
-    /// # Errors
-    /// Fails when the settings are missing or not valid.
     pub fn load(root: &Path) -> Result<Self, Error> {
         let bytes = fs::read(root.join(CONFIG_COPY)).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Error::NoSettings(CONFIG_COPY)
+                Error::NoSettings
             } else {
-                Error::Io {
-                    path: CONFIG_COPY,
-                    source: e,
-                }
+                Error::Io(e)
             }
         })?;
         let config: StickConfig =
@@ -93,8 +83,12 @@ impl Uplink {
     /// The address heartbeats go to, or `None` when the admin set no server (no reporting).
     #[must_use]
     pub fn url(&self) -> Option<String> {
+        self.address(HEARTBEAT_PATH)
+    }
+
+    fn address(&self, path: &str) -> Option<String> {
         let base = self.config.settings.api.url.trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}{HEARTBEAT_PATH}"))
+        (!base.is_empty()).then(|| format!("{base}{path}"))
     }
 
     #[must_use]
@@ -133,11 +127,8 @@ impl Uplink {
         }
     }
 
-    /// Signs `heartbeat` with the stick's secret and sends it.
-    ///
-    /// # Errors
-    /// [`Error::Rejected`] when the Hub answers with an error status, [`Error::Unreachable`] when
-    /// there is no answer.
+    /// Signs `heartbeat` with the stick's secret and sends it: [`Error::Rejected`] when the Hub
+    /// answers with an error status, [`Error::Unreachable`] when there is no answer.
     pub fn send(&self, url: &str, heartbeat: &Heartbeat) -> Result<(), Error> {
         let body = serde_json::to_vec(heartbeat).expect("a heartbeat always serializes");
         self.post(url, &body)
@@ -146,8 +137,7 @@ impl Uplink {
     /// The address events go to, or `None` when the admin set no server.
     #[must_use]
     pub fn events_url(&self) -> Option<String> {
-        let base = self.config.settings.api.url.trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}{EVENTS_PATH}"))
+        self.address(EVENTS_PATH)
     }
 
     /// The stick this agent reports for, and the id of this boot: what the queue needs to chain
@@ -162,10 +152,7 @@ impl Uplink {
     /// were sent.
     ///
     /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
-    /// sent.
-    ///
-    /// # Errors
-    /// The error that stopped the sending. Events not yet sent stay in the queue.
+    /// sent. An error is returned only when nothing was sent; events not sent stay in the queue.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
         for (counter, event) in queue.pending()? {
@@ -180,7 +167,6 @@ impl Uplink {
         Ok(sent)
     }
 
-    /// Signs `body` with the stick's secret and posts it.
     fn post(&self, url: &str, body: &[u8]) -> Result<(), Error> {
         let signature = ck_crypto::sign(&self.config.token, body);
 

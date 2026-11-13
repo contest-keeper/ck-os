@@ -7,7 +7,7 @@
 use std::fs;
 use std::io::ErrorKind;
 
-use ck_protocol::StickConfig;
+use ck_protocol::{ESP_CONFIG_FILE, StickConfig};
 use serde_json::{Value, json};
 
 use crate::apply::write;
@@ -30,9 +30,6 @@ const MAX_WELCOME_BYTES: usize = 16 * 1024;
 /// A wallpaper is a picture; anything bigger than this is not one the admin meant to use.
 const MAX_WALLPAPER_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Applies the computer name, the wallpaper, the Firefox bookmarks and home page and the welcome text.
-///
-/// # Errors
 /// Fails when a file cannot be written, or the Firefox policies file is not valid JSON.
 pub fn apply_branding(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let config = &loaded.config;
@@ -85,16 +82,17 @@ fn hosts_with_name(hosts: &str, name: &str) -> String {
 }
 
 fn apply_wallpaper(root: &Root, config: &StickConfig) -> Result<(), Error> {
-    let target = root.path(TEAM_WALLPAPER);
     let Some(name) = &config.settings.branding.wallpaper else {
         // No wallpaper chosen: take away one from an earlier boot, so the image's own shows again.
-        return match fs::remove_file(&target) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(Error::io(format!("removing {TEAM_WALLPAPER}"), e)),
-        };
+        return remove(root, TEAM_WALLPAPER);
     };
 
+    // The settings file holds the stick's secret and the wallpaper is readable by everyone, so it
+    // is never copied out under that name. FAT ignores case.
+    if name.eq_ignore_ascii_case(ESP_CONFIG_FILE) {
+        tracing::warn!("the wallpaper cannot be the settings file; keeping the current wallpaper");
+        return Ok(());
+    }
     // The settings check makes `name` a plain file name, so it cannot point outside the folder.
     let source = root.path(&format!("{EFI_FOLDER}/{name}"));
     let size = match fs::metadata(&source) {

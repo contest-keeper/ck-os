@@ -25,7 +25,6 @@ shift
 agent_file=${2:?$usage}
 patch_directory=$(cd "$(dirname "$0")" && pwd)
 
-# Keep the low-level filesystem commands separate from the steps below.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/image-tools.sh
 source "$patch_directory/lib/image-tools.sh"

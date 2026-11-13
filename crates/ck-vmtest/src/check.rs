@@ -93,7 +93,6 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
     problems
 }
 
-/// The states `systemctl` reported for the services the stick should run.
 fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Report) {
     let recording_on = settings.recording.mode.as_str() != "off";
     unit(problems, report, "ck-config", Some("active"), "enabled");

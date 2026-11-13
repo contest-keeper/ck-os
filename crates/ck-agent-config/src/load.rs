@@ -28,11 +28,8 @@ impl std::fmt::Debug for Loaded {
     }
 }
 
-/// Reads and validates `/boot/efi/ck/config.json`.
-///
-/// # Errors
-/// [`Error::SettingsMissing`] when the file does not exist, otherwise when it cannot be read,
-/// is not valid or has problems.
+/// Reads and validates `/boot/efi/ck/config.json`. A file that does not exist is
+/// [`Error::SettingsMissing`], which callers treat differently from a bad file.
 pub fn load(root: &Root) -> Result<Loaded, Error> {
     let file = match File::open(root.path(EFI_CONFIG)) {
         Ok(file) => file,
@@ -54,7 +51,6 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
     if !problems.is_empty() {
         return Err(Error::SettingsInvalid(problems));
     }
-    // `validate` also refuses a team or site that is not one line, since both end up in one-line files.
     let sha256 = ck_crypto::sha256_hex(&raw);
     Ok(Loaded {
         config,

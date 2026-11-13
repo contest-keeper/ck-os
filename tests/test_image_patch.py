@@ -171,23 +171,32 @@ class ImagePatchTests(unittest.TestCase):
         self.assertIn("sif /etc/ck/config.conf uid 0\n", commands)
         self.assertIn("sif /etc/ck/config.conf gid 0\n", commands)
 
-    def test_masks_old_service_and_enables_recorder(self):
+    def test_masks_old_service_and_removes_leftover_file(self):
         self.assertEqual(self.run_patch().returncode, 0)
         commands = self.commands_file.read_text()
         self.assertIn("symlink /etc/systemd/system/old.service /dev/null\n", commands)
         self.assertIn("rm /old-file\n", commands)
-        self.assertIn("symlink /etc/systemd/system/graphical.target.wants/ck-recorder.service "
-                      "/etc/systemd/system/ck-recorder.service\n", commands)
 
-    def test_installs_the_agent_unchanged_and_executable_and_enables_the_config_service(self):
+    def test_enables_each_service_and_fails_when_its_link_is_missing(self):
+        self.assertEqual(self.run_patch().returncode, 0)
+        commands = self.commands_file.read_text()
+        for service, target in (("ck-recorder.service", "graphical.target"),
+                                ("ck-config.service", "multi-user.target"),
+                                ("ck-selftest.service", "multi-user.target"),
+                                ("ck-uplink.service", "multi-user.target")):
+            link = f"/etc/systemd/system/{target}.wants/{service}"
+            with self.subTest(service=service):
+                self.assertIn(f"symlink {link} /etc/systemd/system/{service}\n", commands)
+                result = self.run_patch(SKIP_LINKS=link)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"MISSING LINK {link}", result.stdout)
+
+    def test_installs_the_agent_unchanged_and_executable(self):
         result = self.run_patch()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         state = json.loads(self.state_file.read_text())
         self.assertEqual(state["files"]["/usr/local/bin/ck-agent"].encode("latin-1"), self.agent.read_bytes())
-        commands = self.commands_file.read_text()
-        self.assertIn("sif /usr/local/bin/ck-agent mode 0100755\n", commands)
-        self.assertIn("symlink /etc/systemd/system/multi-user.target.wants/ck-config.service "
-                      "/etc/systemd/system/ck-config.service\n", commands)
+        self.assertIn("sif /usr/local/bin/ck-agent mode 0100755\n", self.commands_file.read_text())
 
     def test_refuses_an_agent_that_is_not_a_linux_program_before_writing(self):
         windows_build = self.directory / "ck-agent.exe"
@@ -207,27 +216,6 @@ class ImagePatchTests(unittest.TestCase):
         result = self.run_patch(CORRUPT_FILE="/usr/local/bin/ck-agent")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MISMATCH /usr/local/bin/ck-agent", result.stdout)
-
-    def test_enables_the_self_test_service_and_checks_it(self):
-        self.assertEqual(self.run_patch().returncode, 0)
-        self.assertIn("symlink /etc/systemd/system/multi-user.target.wants/ck-selftest.service "
-                      "/etc/systemd/system/ck-selftest.service\n", self.commands_file.read_text())
-        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-selftest.service")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-selftest.service", result.stdout)
-
-    def test_enables_the_uplink_service_and_checks_it(self):
-        self.assertEqual(self.run_patch().returncode, 0)
-        self.assertIn("symlink /etc/systemd/system/multi-user.target.wants/ck-uplink.service "
-                      "/etc/systemd/system/ck-uplink.service\n", self.commands_file.read_text())
-        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-uplink.service")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-uplink.service", result.stdout)
-
-    def test_fails_when_the_config_service_is_not_enabled(self):
-        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/multi-user.target.wants/ck-config.service")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("MISSING LINK /etc/systemd/system/multi-user.target.wants/ck-config.service", result.stdout)
 
     def test_runs_twice_without_trouble(self):
         self.assertEqual(self.run_patch().returncode, 0)
@@ -285,11 +273,6 @@ class ImagePatchTests(unittest.TestCase):
         result = self.run_patch(SKIP_LINKS="/etc/systemd/system/old.service")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MISSING LINK /etc/systemd/system/old.service -> /dev/null", result.stdout)
-
-    def test_fails_when_recorder_is_not_enabled(self):
-        result = self.run_patch(SKIP_LINKS="/etc/systemd/system/graphical.target.wants/ck-recorder.service")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("MISSING LINK /etc/systemd/system/graphical.target.wants/ck-recorder.service", result.stdout)
 
     def test_fails_when_leftover_file_is_not_removed(self):
         result = self.run_patch(EXISTING_PATHS="/old-file")
