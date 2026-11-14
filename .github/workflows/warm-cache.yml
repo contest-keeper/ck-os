@@ -1,0 +1,35 @@
+name: Warm caches
+
+# Pull requests restore the build caches saved on their base branch. Building develop here keeps those
+# caches fresh, so a new pull request does not start from a cold Rust build.
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    uses: contest-keeper/.github/.github/workflows/rust-ci.yml@main
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ck-os-agent
+      - run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p ck-agent

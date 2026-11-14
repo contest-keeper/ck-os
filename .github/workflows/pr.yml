@@ -2,15 +2,17 @@ name: PR
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  title:
-    uses: contest-keeper/.github/.github/workflows/pr-title.yml@main
   common:
     uses: contest-keeper/.github/.github/workflows/common-ci.yml@main
   patch-tests:
@@ -33,15 +35,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
+      - run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ck-os-agent
       - run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p ck-agent
       - name: Check the agent is static
         run: file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ck-agent-linux
-          path: target/x86_64-unknown-linux-musl/release/ck-agent
-          if-no-files-found: error
