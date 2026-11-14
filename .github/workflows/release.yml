@@ -12,7 +12,58 @@ jobs:
   release-please:
     uses: contest-keeper/.github/.github/workflows/release-please.yml@main
 
-  # Build and upload release files here, e.g.:
-  # build:
-  #   needs: release-please
-  #   if: needs.release-please.outputs.release_created == 'true'
+  # What a release holds: the static agent and the image patch with its version label set from this
+  # release. The 28 GB base image is never built here: the patch is applied to a copy of it on the
+  # machine that makes sticks (see image/patch/apply-to-image.sh).
+  files:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent
+      - name: Check the agent is static
+        run: file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
+      - name: Assemble the files
+        run: |
+          mkdir -p out stage/ck-os-patch
+          cp target/x86_64-unknown-linux-musl/release/ck-agent out/ck-agent-linux-x64
+          cp -r image/patch/. stage/ck-os-patch/
+          cp out/ck-agent-linux-x64 stage/ck-os-patch/ck-agent
+          # The label every stick reports as its image version: the release and the exact commit.
+          printf 'ck-os %s (%s)\n' "${TAG#v}" "$(git rev-parse --short=12 HEAD)" \
+            > stage/ck-os-patch/rootfs/etc/ck/image-version
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            -czf out/ck-os-patch.tar.gz -C stage ck-os-patch
+          tar -tzvf out/ck-os-patch.tar.gz | head -20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: os-files
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [release-please, files]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: contest-keeper/.github/.github/workflows/release-assets.yml@main
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+      artifact_name: os-files

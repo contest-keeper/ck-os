@@ -23,6 +23,22 @@ Keeper OS targets x86-64 PCs booting from USB. Sticks are prepared with
 
 Base images and virtual machine disks are not distributed in this repository.
 
+## Download
+
+Each release on the [releases page](https://github.com/contest-keeper/ck-os/releases/latest) has:
+
+| File | What it is |
+|---|---|
+| `ck-os-patch.tar.gz` | The image patch with the agent inside (`ck-agent`) and the version label of that release in `rootfs/etc/ck/image-version`. Unpack it and run `bash apply-to-image.sh --in-place <copy of the base image> --agent ck-agent`. |
+| `ck-agent-linux-x64` | The static agent alone. |
+| `SHA256SUMS.txt` | The checksum of every file. |
+
+The file names never change, so `.../releases/latest/download/<file>` always gives the newest
+release. Check a download with `sha256sum -c SHA256SUMS.txt` and prove it came from this
+repository's release workflow with `gh attestation verify <file> --repo contest-keeper/ck-os`.
+
+The base image itself (27.8 GiB) is not part of a release. Always patch a copy of it.
+
 ## Build and run
 
 See [docs/dev-setup.md](docs/dev-setup.md) for the toolchain. The agent for the stick is a static
