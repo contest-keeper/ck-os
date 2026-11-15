@@ -19,7 +19,7 @@ table inet ck_netlock {
 		ct state established,related accept
 		meta skuid { root, proxy, systemd-timesync } accept
 		# Everyone else may only talk to Squid, not to the local name resolver.
-		oif "lo" tcp dport 3128 accept
+		oifname "lo" tcp dport 3128 accept
 	}
 
 	# Nothing may connect in from outside either: a helper on the network could otherwise
@@ -27,10 +27,11 @@ table inet ck_netlock {
 	chain input {
 		type filter hook input priority 0; policy drop;
 
-		iif "lo" accept
+		iifname "lo" accept
 		ct state established,related accept
 		# The address lease answer from the router.
 		udp sport 67 udp dport 68 accept
-		icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+		# IPv6 router advertisement and neighbour solicitation and advertisement, by number.
+		icmpv6 type { 134, 135, 136 } accept
 	}
 }
