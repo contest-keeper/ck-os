@@ -1,0 +1,37 @@
+#!/usr/sbin/nft -f
+# Keeper OS network lock. Loaded by ck-netlock.service before the network comes up and never
+# changed by the settings, so a stick with missing or broken settings is locked too.
+#
+# Only these users may send anything to the network: root (NetworkManager, DHCP, ck-agent and its
+# Hub heartbeats), Squid (the allowlist is enforced there) and the system clock. The name
+# resolver is not on the list: /etc/resolv.conf names the router's DNS server directly, so Squid
+# looks names up itself and nobody can carry data out in DNS names through systemd-resolved. Everyone else, including the contestant, can only reach this machine
+# itself, so the web goes through Squid or nowhere. If an image runs Squid as another user, change it here.
+
+# Declared first so that deleting it works whether or not it exists.
+table inet ck_netlock
+delete table inet ck_netlock
+
+table inet ck_netlock {
+	chain output {
+		type filter hook output priority 0; policy drop;
+
+		ct state established,related accept
+		meta skuid { root, proxy, systemd-timesync } accept
+		# Everyone else may only talk to Squid, not to the local name resolver.
+		oifname "lo" tcp dport 3128 accept
+	}
+
+	# Nothing may connect in from outside either: a helper on the network could otherwise
+	# reach a service on the stick and pass data through it.
+	chain input {
+		type filter hook input priority 0; policy drop;
+
+		iifname "lo" accept
+		ct state established,related accept
+		# The address lease answer from the router.
+		udp sport 67 udp dport 68 accept
+		# IPv6 router advertisement and neighbour solicitation and advertisement, by number.
+		icmpv6 type { 134, 135, 136 } accept
+	}
+}
