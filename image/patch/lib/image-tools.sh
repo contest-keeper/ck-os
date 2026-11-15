@@ -193,6 +193,16 @@ symlink $service_link /etc/systemd/system/$service_name
 COMMANDS
 }
 
+# The stub resolver at 127.0.0.53 sends lookups for anyone, so it is not allowed to use the
+# network (see netlock.nft). Pointing resolv.conf at the upstream servers lets Squid ask them itself.
+queue_direct_dns() {
+  local commands_file=$1
+  cat >>"$commands_file" <<COMMANDS
+rm /etc/resolv.conf
+symlink /etc/resolv.conf /run/systemd/resolve/resolv.conf
+COMMANDS
+}
+
 queue_efi_permissions() {
   local filesystem=$1
   local work_directory=$2
@@ -293,6 +303,10 @@ verify_enabled_service() {
   local filesystem=$3
   verify_link "$filesystem" "/etc/systemd/system/$target.wants/$service_name" \
     "/etc/systemd/system/$service_name"
+}
+
+verify_direct_dns() {
+  verify_link "$1" /etc/resolv.conf /run/systemd/resolve/resolv.conf
 }
 
 verify_removed_files() {

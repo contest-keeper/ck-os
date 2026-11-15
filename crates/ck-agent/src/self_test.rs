@@ -10,11 +10,12 @@ use std::process::Command;
 use ck_selftest::{Applied, Report, UnitState};
 
 /// The services the VM test cares about.
-const UNITS: [&str; 4] = [
+const UNITS: [&str; 5] = [
     "ck-config",
     "ck-recorder",
     "ck-uplink",
     "icpc-screen-record",
+    "ck-netlock",
 ];
 
 /// A test machine asks for the report with this OEM string, which QEMU can set with

@@ -19,8 +19,8 @@ patch, the agent or the settings format. It takes about 25 seconds with accelera
      choose them;
    - the root-only copy of the settings matches its stored hash;
    - `ck-config` is active and enabled, `ck-recorder` is enabled (and active unless recording is off),
-     `ck-uplink` is enabled (and active when the settings name a server), and the contest's old
-     `icpc-screen-record` is masked.
+     `ck-uplink` is enabled (and active when the settings name a server), `ck-netlock` is active and
+     enabled, and the contest's old `icpc-screen-record` is masked.
 
 Exit code 0 is PASS, 1 is FAIL with the reasons listed, 2 means the test could not run (no QEMU,
 unreadable image) so nothing is known about the image.
@@ -49,6 +49,11 @@ The base copy is only read by `image build`. To test a newer agent on an existin
 `tools/patch-image.ps1` on that stick again: the patch can be applied repeatedly.
 
 ## Not covered
+
+- That the network lock really blocks a contestant. The test only sees that `ck-netlock` loaded the
+  ruleset; try a direct `curl` as the contest user on a booted stick (it must fail, while the proxy works).
+  The ruleset assumes Squid runs as `proxy`; check that on a new base image.
+  Also check that `/etc/resolv.conf` shows the router's DNS server and that `resolvectl query` fails.
 
 - Real hardware (A.9) and a physical USB stick.
 - Anything that needs a contestant to log in, such as login detection (phase B).

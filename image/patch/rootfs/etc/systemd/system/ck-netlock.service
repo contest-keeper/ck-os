@@ -1,0 +1,17 @@
+[Unit]
+Description=Keeper OS: network lock
+# The lock must be in place before any interface can carry traffic.
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ck/netlock.nft
+# Take the lock off when the service stops, so a stopped service is never half locked.
+ExecStop=/usr/sbin/nft delete table inet ck_netlock
+
+[Install]
+WantedBy=sysinit.target

@@ -114,6 +114,7 @@ fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Repo
         "enabled",
     );
     unit(problems, report, "icpc-screen-record", None, "masked");
+    unit(problems, report, "ck-netlock", Some("active"), "enabled");
 }
 
 fn same(problems: &mut Vec<String>, what: &str, expected: Option<&str>, actual: Option<&str>) {
@@ -211,6 +212,7 @@ mod tests {
                 state("ck-recorder", "active", "enabled"),
                 state("ck-uplink", "inactive", "enabled"),
                 state("icpc-screen-record", "inactive", "masked"),
+                state("ck-netlock", "active", "enabled"),
             ],
         }
     }
