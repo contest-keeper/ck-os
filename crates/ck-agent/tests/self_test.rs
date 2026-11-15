@@ -67,7 +67,8 @@ fn reports_what_apply_config_wrote_and_never_the_secret() {
             "ck-config",
             "ck-recorder",
             "ck-uplink",
-            "icpc-screen-record"
+            "icpc-screen-record",
+            "ck-netlock"
         ]
     );
     assert!(!String::from_utf8_lossy(&result.stdout).contains("the-secret-token"));

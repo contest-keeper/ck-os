@@ -3,7 +3,7 @@
 Keeper OS is the bootable contest environment for
 [Contest Keeper](https://github.com/contest-keeper). It extends an existing Linux contest image
 with a patch and a Rust agent, `ck-agent`, that applies the organizer's settings at boot and
-reports to Keeper Hub. Login and submission capture and the network lock are not built yet.
+reports to Keeper Hub. Login and submission capture are not built yet.
 
 Keeper OS targets x86-64 PCs booting from USB. Sticks are prepared with
 [Keeper Forge](https://github.com/contest-keeper/ck-forge), the server is
@@ -18,8 +18,8 @@ Keeper OS targets x86-64 PCs booting from USB. Sticks are prepared with
 - `crates/ck-agent-config`, `crates/ck-agent-uplink`, `crates/ck-selftest`: the libraries behind
   those commands.
 - `crates/ck-vmtest`: boots a stick image in QEMU and says PASS or FAIL.
-- `image/patch/`: the files added to the contest image (services, the recorder, the welcome
-  window) and the script that installs them and the agent into an image.
+- `image/patch/`: the files added to the contest image (services, the network lock, the recorder,
+  the welcome window) and the script that installs them and the agent into an image.
 
 Base images and virtual machine disks are not distributed in this repository.
 

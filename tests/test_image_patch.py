@@ -182,6 +182,7 @@ class ImagePatchTests(unittest.TestCase):
         commands = self.commands_file.read_text()
         for service, target in (("ck-recorder.service", "graphical.target"),
                                 ("ck-config.service", "multi-user.target"),
+                                ("ck-netlock.service", "sysinit.target"),
                                 ("ck-selftest.service", "multi-user.target"),
                                 ("ck-uplink.service", "multi-user.target")):
             link = f"/etc/systemd/system/{target}.wants/{service}"
@@ -190,6 +191,14 @@ class ImagePatchTests(unittest.TestCase):
                 result = self.run_patch(SKIP_LINKS=link)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(f"MISSING LINK {link}", result.stdout)
+
+    def test_points_resolv_conf_at_the_upstream_servers(self):
+        self.assertEqual(self.run_patch().returncode, 0)
+        self.assertIn("symlink /etc/resolv.conf /run/systemd/resolve/resolv.conf\n",
+                      self.commands_file.read_text())
+        result = self.run_patch(SKIP_LINKS="/etc/resolv.conf")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MISSING LINK /etc/resolv.conf", result.stdout)
 
     def test_installs_the_agent_unchanged_and_executable(self):
         result = self.run_patch()
