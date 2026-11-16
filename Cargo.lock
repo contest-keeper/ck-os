@@ -164,6 +164,7 @@ dependencies = [
  "chrono",
  "ck-agent-config",
  "ck-agent-uplink",
+ "ck-capture",
  "ck-crypto",
  "ck-protocol",
  "ck-selftest",
@@ -199,6 +200,16 @@ dependencies = [
  "thiserror",
  "tracing",
  "ureq",
+]
+
+[[package]]
+name = "ck-capture"
+version = "0.1.0"
+dependencies = [
+ "ck-crypto",
+ "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

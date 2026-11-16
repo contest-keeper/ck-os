@@ -222,6 +222,39 @@ queue_efi_permissions() {
   fi
 }
 
+SQUID_INCLUDE_LINE='include /etc/squid/ck-capture.conf'
+
+# Squid does not read a folder of extra files, so one line is added at the end of its settings. It
+# is added once: applying the patch again leaves the file as it is.
+queue_squid_include() {
+  local filesystem=$1
+  local work_directory=$2
+  local commands_file=$3
+  local squid_file="$work_directory/squid.conf"
+  debugfs -R "dump /etc/squid/squid.conf $squid_file" "$filesystem" 2>/dev/null
+  if [[ ! -s "$squid_file" ]]; then
+    echo "ERROR: no /etc/squid/squid.conf in the image; nothing was applied" >&2
+    return 1
+  fi
+  if ! grep -qxF "$SQUID_INCLUDE_LINE" "$squid_file"; then
+    printf '
+%s
+' "$SQUID_INCLUDE_LINE" >>"$squid_file"
+  fi
+  queue_image_file "$squid_file" /etc/squid/squid.conf 0100640 "$commands_file"
+  # Squid's own group (proxy, 13) reads this file; queue_image_file made it root's.
+  printf 'sif /etc/squid/squid.conf gid 13
+' >>"$commands_file"
+}
+
+verify_squid_include() {
+  local filesystem=$1
+  if ! debugfs -R 'cat /etc/squid/squid.conf' "$filesystem" 2>/dev/null | grep -qxF "$SQUID_INCLUDE_LINE"; then
+    echo "MISSING $SQUID_INCLUDE_LINE in /etc/squid/squid.conf"
+    return 1
+  fi
+}
+
 apply_image_commands() {
   local filesystem=$1
   local commands_file=$2

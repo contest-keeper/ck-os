@@ -20,9 +20,14 @@ const UNITS: [&str; 5] = [
 
 /// A test machine asks for the report with this OEM string, which QEMU can set with
 /// `-smbios type=11,value=ck-selftest=1`. A real stick never has it.
-const REQUEST: &[u8] = b"ck-selftest=1";
+const REQUEST: &str = "ck-selftest=1";
 
 pub fn requested(root: &Path) -> bool {
+    oem_string_present(root, REQUEST)
+}
+
+/// Whether the machine was started with this OEM string (`-smbios type=11,value=...` in QEMU).
+pub fn oem_string_present(root: &Path, wanted: &str) -> bool {
     let Ok(entries) = fs::read_dir(root.join("sys/firmware/dmi/entries")) else {
         return false;
     };
@@ -32,7 +37,9 @@ pub fn requested(root: &Path) -> bool {
             continue;
         }
         if let Ok(raw) = fs::read(entry.path().join("raw"))
-            && raw.windows(REQUEST.len()).any(|window| window == REQUEST)
+            && raw
+                .windows(wanted.len())
+                .any(|window| window == wanted.as_bytes())
         {
             return true;
         }

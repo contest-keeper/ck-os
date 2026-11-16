@@ -56,6 +56,22 @@ enum Command {
         /// The details, as JSON. Never a password, a cookie or a session id
         payload: String,
     },
+    /// Serve the proxy's ICAP requests: tell the Hub who logs in and what they submit, and on a
+    /// machine started for observation also write what the traffic looks like, never its values
+    Capture {
+        /// The folder that stands for `/` (only for tests; the stick uses `/`)
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+        /// Where to listen; only this machine can connect
+        #[arg(long, default_value = "127.0.0.1:1344")]
+        listen: String,
+        /// Where the observation lines go, for example the serial port; the journal when left out
+        #[arg(long)]
+        write_to: Option<PathBuf>,
+        /// Write the observation lines only on a machine started with the OEM string `ck-observe=1`
+        #[arg(long)]
+        observe_if_requested: bool,
+    },
     /// Report what is applied on this machine, for the VM test
     SelfTest {
         /// The folder that stands for `/` (only for tests; the stick uses `/`)
@@ -86,6 +102,12 @@ fn main() -> ExitCode {
             kind,
             payload,
         } => enqueue(&root, &kind, &payload),
+        Command::Capture {
+            root,
+            listen,
+            write_to,
+            observe_if_requested,
+        } => capture(&root, &listen, write_to.as_deref(), observe_if_requested),
         Command::SelfTest {
             root,
             only_if_requested,
@@ -118,6 +140,98 @@ fn apply_config(root: &Root) -> ExitCode {
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
+}
+
+/// The login and the submissions go to the Hub on every stick. The shape of the traffic is written
+/// only on a test machine that was started on purpose, so a real stick never records even that.
+fn capture(
+    root: &std::path::Path,
+    listen: &str,
+    write_to: Option<&std::path::Path>,
+    observe_if_requested: bool,
+) -> ExitCode {
+    let observe = !observe_if_requested || self_test::oem_string_present(root, "ck-observe=1");
+    let listener = match std::net::TcpListener::bind(listen) {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!("cannot listen on {listen}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Without observation the rule makes no notes, so this is never written to.
+    let sink: Box<dyn Write + Send> = match (observe, write_to) {
+        (false, _) => Box::new(std::io::sink()),
+        (true, Some(path)) => match OpenOptions::new().append(true).create(true).open(path) {
+            Ok(file) => Box::new(file),
+            Err(error) => {
+                tracing::error!("cannot write to {}: {error}", path.display());
+                return ExitCode::FAILURE;
+            }
+        },
+        (true, None) => Box::new(std::io::stderr()),
+    };
+    tracing::info!(%listen, observe, "watching the contest site for logins and submissions");
+    let events = queued_events(root);
+    match ck_capture::serve(
+        &listener,
+        Box::new(ck_capture::Codeforces::new(observe)),
+        sink,
+        events,
+        "CKCAP ",
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!("capture stopped: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Events a rule makes go into the queue the uplink sends from, in the chain of this boot. A stick
+/// with no settings has no identity to sign them with, so its events are dropped.
+struct QueuedEvents {
+    queue: Queue,
+    stick: ck_protocol::StickId,
+    boot: String,
+    /// The queue's chain state is read and written again for each event: one at a time.
+    one_at_a_time: std::sync::Mutex<()>,
+}
+
+impl ck_capture::EventSink for QueuedEvents {
+    fn send(&self, kind: ck_capture::EventKind, payload: serde_json::Value) -> Result<(), String> {
+        let kind = match kind {
+            ck_capture::EventKind::Login => ck_protocol::EventKind::Login,
+            ck_capture::EventKind::Submission => ck_protocol::EventKind::Submission,
+        };
+        let _guard = self.one_at_a_time.lock().map_err(|e| e.to_string())?;
+        self.queue
+            .push(&self.stick, &self.boot, kind, payload, chrono::Utc::now())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn queued_events(root: &std::path::Path) -> Box<dyn ck_capture::EventSink> {
+    let queue = Queue::open(root.join(QUEUE_FOLDER));
+    match (Uplink::load(root), queue) {
+        (Ok(uplink), Ok(queue)) => {
+            let (stick, boot) = uplink.identity();
+            Box::new(QueuedEvents {
+                queue,
+                stick: stick.clone(),
+                boot: boot.to_owned(),
+                one_at_a_time: std::sync::Mutex::new(()),
+            })
+        }
+        (uplink, queue) => {
+            tracing::warn!(
+                "events cannot be queued, so they are dropped ({:?}, {:?})",
+                uplink.err().map(|e| e.to_string()),
+                queue.err().map(|e| e.to_string())
+            );
+            Box::new(ck_capture::NoEvents)
+        }
+    }
 }
 
 fn self_test(

@@ -55,6 +55,8 @@ queue_enabled_service ck-netlock.service sysinit.target "$commands_file"
 queue_direct_dns "$commands_file"
 queue_enabled_service ck-selftest.service multi-user.target "$commands_file"
 queue_enabled_service ck-uplink.service multi-user.target "$commands_file"
+queue_enabled_service ck-capture.service multi-user.target "$commands_file"
+queue_squid_include "$filesystem" "$work_directory" "$commands_file"
 queue_efi_permissions "$filesystem" "$work_directory" "$commands_file"
 
 # 4. Apply the command list to the image.
@@ -72,6 +74,8 @@ verify_enabled_service ck-netlock.service sysinit.target "$filesystem" || verifi
 verify_direct_dns "$filesystem" || verification_failed=1
 verify_enabled_service ck-selftest.service multi-user.target "$filesystem" || verification_failed=1
 verify_enabled_service ck-uplink.service multi-user.target "$filesystem" || verification_failed=1
+verify_enabled_service ck-capture.service multi-user.target "$filesystem" || verification_failed=1
+verify_squid_include "$filesystem" || verification_failed=1
 verify_efi_permissions "$filesystem" || verification_failed=1
 verify_filesystem "$filesystem" "$work_directory" || verification_failed=1
 

@@ -31,6 +31,7 @@ state_file = Path(os.environ["FAKE_STATE"])
 
 
 FSTAB = os.environ.get("FAKE_FSTAB", "UUID=example /boot/efi vfat defaults 0 1\n")
+SQUID = "http_port 3128\nacl allowed_domains dstdomain \"/etc/squid/acl_allowed_domains.txt\"\n"
 
 
 def names(variable):
@@ -95,11 +96,17 @@ elif tool == "debugfs":
             elif path in names("EXISTING_PATHS"):
                 print("Inode: 42")
         elif parts[0] == "dump":
-            Path(parts[2]).write_text(FSTAB)
+            if parts[1] == "/etc/squid/squid.conf":
+                original = "" if os.environ.get("NO_SQUID") else SQUID
+                Path(parts[2]).write_text(state["files"].get(parts[1], original))
+            else:
+                Path(parts[2]).write_text(FSTAB)
         elif parts[0] == "cat":
             content = state["files"].get(parts[1], "")
             if parts[1] == "/etc/fstab" and parts[1] not in state["files"]:
                 content = FSTAB  # The image's original fstab, if the patch did not replace it.
+            if parts[1] == "/etc/squid/squid.conf" and parts[1] not in state["files"]:
+                content = SQUID
             if os.environ.get("CORRUPT_FILE") == parts[1]:
                 content = "corrupted file\n"
             sys.stdout.buffer.write(content.encode("latin-1"))
@@ -184,7 +191,8 @@ class ImagePatchTests(unittest.TestCase):
                                 ("ck-config.service", "multi-user.target"),
                                 ("ck-netlock.service", "sysinit.target"),
                                 ("ck-selftest.service", "multi-user.target"),
-                                ("ck-uplink.service", "multi-user.target")):
+                                ("ck-uplink.service", "multi-user.target"),
+                                ("ck-capture.service", "multi-user.target")):
             link = f"/etc/systemd/system/{target}.wants/{service}"
             with self.subTest(service=service):
                 self.assertIn(f"symlink {link} /etc/systemd/system/{service}\n", commands)
@@ -301,6 +309,27 @@ class ImagePatchTests(unittest.TestCase):
         self.assertIn("COPY", result.stderr)
         self.assertEqual(self.image.read_bytes(), before)
         self.assertFalse(self.calls_file.exists() and self.calls_file.read_text().strip())
+
+    def test_adds_the_capture_include_to_squid_once_and_keeps_its_group(self):
+        include = "include /etc/squid/ck-capture.conf"
+        for _ in range(2):  # the second run is the patch applied again
+            self.assertEqual(self.run_patch().returncode, 0)
+        squid = json.loads(self.state_file.read_text())["files"]["/etc/squid/squid.conf"]
+        self.assertEqual(squid.splitlines().count(include), 1)
+        self.assertTrue(squid.startswith("http_port 3128\n"), "the original settings are kept")
+        commands = self.commands_file.read_text()
+        self.assertIn("sif /etc/squid/squid.conf mode 0100640\n", commands)
+        self.assertIn("sif /etc/squid/squid.conf gid 13\n", commands)
+
+    def test_fails_without_squid_settings_in_the_image(self):
+        result = self.run_patch(NO_SQUID="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no /etc/squid/squid.conf", result.stderr)
+
+    def test_fails_when_the_squid_include_is_missing_afterwards(self):
+        result = self.run_patch(CORRUPT_FILE="/etc/squid/squid.conf")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MISSING include /etc/squid/ck-capture.conf", result.stdout)
 
     def test_fails_when_filesystem_check_fails(self):
         result = self.run_patch(FAIL_FSCK="1")
