@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
 ck-agent-uplink = { path = "../ck-agent-uplink", version = "0.1.0" }
+ck-capture = { path = "../ck-capture", version = "0.1.0" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "2503ab9fbb3be77089307adb5cbf9ff83469cd13", version = "0.1.0" }
 ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "2503ab9fbb3be77089307adb5cbf9ff83469cd13", version = "0.1.0" }

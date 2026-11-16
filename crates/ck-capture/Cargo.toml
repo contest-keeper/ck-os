@@ -1,0 +1,16 @@
+[package]
+name = "ck-capture"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "2503ab9fbb3be77089307adb5cbf9ff83469cd13", version = "0.1.0" }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tracing = "0.1.44"

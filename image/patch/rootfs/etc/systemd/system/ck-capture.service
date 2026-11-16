@@ -1,0 +1,26 @@
+[Unit]
+Description=Keeper OS: tell the Hub who logs in to the contest site and what they submit
+# Squid sends its requests here. The shape of the traffic goes to the serial port only on a machine
+# that was started on purpose with the OEM string ck-observe=1; a real stick sends events only.
+# Squid carries on without this service if it is not running.
+After=network.target ck-config.service
+Before=squid.service
+
+[Service]
+ExecStart=/usr/local/bin/ck-agent capture --observe-if-requested --write-to /dev/ttyS0
+Restart=on-failure
+RestartSec=5
+# It reads the machine firmware strings and writes to the serial port, and listens on this machine
+# only. It needs no privileges beyond that.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectHome=yes
+ProtectSystem=strict
+# The queue of events for the Hub, shared with ck-uplink.service; root-only.
+StateDirectory=ck/queue
+StateDirectoryMode=0700
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
