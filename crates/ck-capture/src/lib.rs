@@ -11,11 +11,13 @@ mod fields;
 mod form;
 mod http;
 mod icap;
+mod network;
 mod observe;
 mod server;
 
 pub use codeforces::Codeforces;
 pub use http::{Head, parse_request_head, parse_response_head};
+pub use network::follow as follow_network;
 pub use observe::Observer;
 pub use server::serve;
 
@@ -39,6 +41,8 @@ pub struct Response {
 pub enum EventKind {
     Login,
     Submission,
+    /// A batch of what the proxy carried or refused.
+    Network,
 }
 
 /// What a rule makes of one request or response.
