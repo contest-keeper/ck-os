@@ -1,8 +1,10 @@
 [Unit]
-Description=Keeper OS: tell the Hub who logs in to the contest site and what they submit
+Description=Keeper OS: tell the Hub who logs in, what they submit and what the proxy carried
 # Squid sends its requests here. The shape of the traffic goes to the serial port only on a machine
 # that was started on purpose with the OEM string ck-observe=1; a real stick sends events only.
-# Squid carries on without this service if it is not running.
+# Squid carries on without this service if it is not running. It also reads Squid's access log and
+# reports it in batches (host, path without query, answer, size), so it may read that log, which
+# belongs to Squid's own user, and nothing else beyond its own folders.
 After=network.target ck-config.service
 Before=squid.service
 
@@ -13,11 +15,12 @@ RestartSec=5
 # It reads the machine firmware strings and writes to the serial port, and listens on this machine
 # only. It needs no privileges beyond that.
 NoNewPrivileges=yes
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 ProtectHome=yes
 ProtectSystem=strict
-# The queue of events for the Hub, shared with ck-uplink.service; root-only.
-StateDirectory=ck/queue
+# The queue of events for the Hub, shared with ck-uplink.service, and how far the log was read;
+# root-only.
+StateDirectory=ck/queue ck/netlog
 StateDirectoryMode=0700
 PrivateTmp=yes
 RestrictAddressFamilies=AF_INET AF_UNIX
