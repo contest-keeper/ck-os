@@ -86,6 +86,12 @@ enum Command {
     },
 }
 
+/// Squid's own access log, in its default format.
+const PROXY_LOG: &str = "var/log/squid/access.log";
+/// Where the place reached in that log is kept, so a restart does not send it again.
+const NETWORK_STATE: &str = "var/lib/ck/netlog/offset";
+const NETWORK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
@@ -172,11 +178,12 @@ fn capture(
     };
     tracing::info!(%listen, observe, "watching the contest site for logins and submissions");
     let events = queued_events(root);
+    follow_proxy_log(root, &events);
     match ck_capture::serve(
         &listener,
         Box::new(ck_capture::Codeforces::new(observe)),
         sink,
-        events,
+        Box::new(Shared(events)),
         "CKCAP ",
     ) {
         Ok(()) => ExitCode::SUCCESS,
@@ -184,6 +191,38 @@ fn capture(
             tracing::error!("capture stopped: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The proxy's log of what it carried and refused goes to the Hub as network events, on every stick.
+/// It runs in this process because the queue's chain is only kept in order by one writer.
+fn follow_proxy_log(root: &std::path::Path, events: &std::sync::Arc<dyn ck_capture::EventSink>) {
+    let log = root.join(PROXY_LOG);
+    let state = root.join(NETWORK_STATE);
+    let events = std::sync::Arc::clone(events);
+    let since = chrono::Utc::now().timestamp() - uptime_seconds(root);
+    std::thread::spawn(move || {
+        ck_capture::follow_network(&log, &state, since, &events, NETWORK_INTERVAL);
+    });
+}
+
+/// Seconds since the machine started, so lines of an earlier boot in the log are not reported.
+fn uptime_seconds(root: &std::path::Path) -> i64 {
+    let text = std::fs::read_to_string(root.join("proc/uptime")).unwrap_or_default();
+    // "12345.67 54321.00": the first number is the uptime.
+    let seconds = text
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.split('.').next());
+    seconds.and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+/// Lets two threads use the one queue.
+struct Shared(std::sync::Arc<dyn ck_capture::EventSink>);
+
+impl ck_capture::EventSink for Shared {
+    fn send(&self, kind: ck_capture::EventKind, payload: serde_json::Value) -> Result<(), String> {
+        self.0.send(kind, payload)
     }
 }
 
@@ -202,6 +241,7 @@ impl ck_capture::EventSink for QueuedEvents {
         let kind = match kind {
             ck_capture::EventKind::Login => ck_protocol::EventKind::Login,
             ck_capture::EventKind::Submission => ck_protocol::EventKind::Submission,
+            ck_capture::EventKind::Network => ck_protocol::EventKind::Network,
         };
         let _guard = self.one_at_a_time.lock().map_err(|e| e.to_string())?;
         self.queue
@@ -211,12 +251,12 @@ impl ck_capture::EventSink for QueuedEvents {
     }
 }
 
-fn queued_events(root: &std::path::Path) -> Box<dyn ck_capture::EventSink> {
+fn queued_events(root: &std::path::Path) -> std::sync::Arc<dyn ck_capture::EventSink> {
     let queue = Queue::open(root.join(QUEUE_FOLDER));
     match (Uplink::load(root), queue) {
         (Ok(uplink), Ok(queue)) => {
             let (stick, boot) = uplink.identity();
-            Box::new(QueuedEvents {
+            std::sync::Arc::new(QueuedEvents {
                 queue,
                 stick: stick.clone(),
                 boot: boot.to_owned(),
@@ -229,7 +269,7 @@ fn queued_events(root: &std::path::Path) -> Box<dyn ck_capture::EventSink> {
                 uplink.err().map(|e| e.to_string()),
                 queue.err().map(|e| e.to_string())
             );
-            Box::new(ck_capture::NoEvents)
+            std::sync::Arc::new(ck_capture::NoEvents)
         }
     }
 }
