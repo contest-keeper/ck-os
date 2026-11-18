@@ -10,6 +10,7 @@ use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
+mod admin_account;
 mod hub_commands;
 mod self_test;
 
@@ -147,12 +148,27 @@ fn apply_config(root: &Root) -> ExitCode {
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
         }
+        set_admin_password(loaded.config.settings.admin_password_hash.as_deref());
         if loaded.config.settings.wifi.is_some() {
             reload_network_connections();
         }
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
+}
+
+/// Gives `ckadmin` the password the admin chose. Without a hash the account stays locked. A
+/// failure leaves it locked too (nobody can use sudo), so the rest of the settings still apply.
+fn set_admin_password(hash: Option<&str>) {
+    match admin_account::set_password(std::path::Path::new("chpasswd"), hash) {
+        Ok(admin_account::Outcome::Set) => tracing::info!("admin password set"),
+        Ok(admin_account::Outcome::Locked) => {
+            tracing::info!("no admin password in the settings; the admin account stays locked");
+        }
+        Err(error) => {
+            tracing::error!("cannot set the admin password, the account stays locked: {error}");
+        }
+    }
 }
 
 /// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not

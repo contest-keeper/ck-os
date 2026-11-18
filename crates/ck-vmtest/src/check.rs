@@ -131,6 +131,8 @@ fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Repo
     );
     unit(problems, report, "icpc-screen-record", None, "masked");
     unit(problems, report, "ck-netlock", Some("active"), "enabled");
+    unit(problems, report, "squid", Some("active"), "enabled");
+    unit(problems, report, "ck-capture", Some("active"), "enabled");
 }
 
 fn same(problems: &mut Vec<String>, what: &str, expected: Option<&str>, actual: Option<&str>) {
@@ -229,6 +231,8 @@ mod tests {
                 state("ck-uplink", "inactive", "enabled"),
                 state("icpc-screen-record", "inactive", "masked"),
                 state("ck-netlock", "active", "enabled"),
+                state("squid", "active", "enabled"),
+                state("ck-capture", "active", "enabled"),
             ],
         }
     }
@@ -266,6 +270,22 @@ mod tests {
         assert_eq!(
             problems(&config(), &report),
             ["the report has nothing about ck-config"]
+        );
+    }
+
+    #[test]
+    fn the_proxy_and_the_capture_service_must_be_running() {
+        let mut report = good_report();
+        report.units[5].active = "failed".to_owned();
+        report.units[6].enabled = "disabled".to_owned();
+        let found = problems(&config(), &report);
+        assert!(
+            found.iter().any(|p| p.contains("squid is failed")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|p| p.contains("ck-capture is disabled")),
+            "{found:?}"
         );
     }
 
