@@ -1,0 +1,63 @@
+#!/bin/bash
+# shellcheck disable=SC2329 # the run_* functions are called by name from check
+# Lists the contest languages with their versions. With --run it also compiles and runs a small program in
+# each one as the current user, so a missing compiler, a broken library path or a read-only folder shows up
+# before the contest. Prints one line per language ("ck-toolchain ok c <version>" or "ck-toolchain FAIL c")
+# and exits 1 if any failed. Languages: c, cpp, java (21), python3, kotlin.
+run=0
+[[ ${1:-} == --run ]] && run=1
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+failed=0
+
+report() { # report LANGUAGE VERSION-COMMAND... ; reads $ok
+  local language=$1 version
+  shift
+  version=$("$@" 2>&1 | head -1)
+  if [[ $ok -eq 1 ]]; then
+    echo "ck-toolchain ok $language $version"
+  else
+    echo "ck-toolchain FAIL $language $version"
+    sed 's/^/    /' "$dir/out" 2>/dev/null | head -8
+    failed=1
+  fi
+}
+
+check() { # check LANGUAGE VERSION-COMMAND... ; the program to run is in $dir, set by the caller
+  local language=$1
+  shift
+  ok=1
+  command -v "$1" >/dev/null || ok=0
+  if [[ $ok -eq 1 && $run -eq 1 ]]; then
+    "run_$language" >"$dir/out" 2>&1 && grep -q 'hello-ck' "$dir/out" || ok=0
+  fi
+  report "$language" "$@"
+}
+
+run_c() {
+  printf '#include <stdio.h>\nint main(void){puts("hello-ck");return 0;}\n' >"$dir/h.c"
+  gcc -o "$dir/hc" "$dir/h.c" && "$dir/hc"
+}
+run_cpp() {
+  cat >"$dir/h.cpp" <<'SOURCE'
+#include <iostream>
+int main() { std::cout << "hello-ck" << std::endl; }
+SOURCE
+  g++ -o "$dir/hcpp" "$dir/h.cpp" && "$dir/hcpp"
+}
+run_java() {
+  printf 'public class H{public static void main(String[] a){System.out.println("hello-ck");}}\n' >"$dir/H.java"
+  javac -d "$dir" "$dir/H.java" && java -cp "$dir" H
+}
+run_python3() { python3 -c 'print("hello-ck")'; }
+run_kotlin() {
+  printf 'fun main(){println("hello-ck")}\n' >"$dir/h.kt"
+  kotlinc "$dir/h.kt" -include-runtime -d "$dir/h.jar" 2>/dev/null && java -jar "$dir/h.jar"
+}
+
+check c gcc --version
+check cpp g++ --version
+check java java -version
+check python3 python3 --version
+check kotlin kotlinc -version
+exit "$failed"

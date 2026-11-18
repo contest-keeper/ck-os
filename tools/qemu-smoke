@@ -37,11 +37,12 @@ fi
 
 log=$(mktemp)
 vars=$(mktemp)
-# CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run.
+# CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
+# command in the guest (checks mode), for looking into a failure.
 trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
-args=(-m 2048 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
+args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
 if [[ $mode == checks ]]; then
@@ -122,12 +123,16 @@ run_checks() {
     'timeout 120 su - contestant -c "firefox --headless --screenshot /tmp/ff.png about:blank" >/dev/null 2>&1; echo CK13_firefox_$?'
     'echo CK14_ca_$(certutil -L -d sql:$(dirname $(find /home/contestant -name cert9.db | head -1)) 2>/dev/null | grep -c "Keeper OS contest CA")_in_firefox'
     'dpkg -s firefox | grep -q "^Version: 160.0.1" && ! command -v snap >/dev/null && echo CK15_mozilla_deb_no_snap'
+    'su - contestant -c "ck-toolchains --run"; echo CK16_exit_$?'
+    'for c in code codeblocks geany; do command -v $c >/dev/null || echo missing_$c; done; echo CK17_ms_repo_files_$(ls /etc/apt/sources.list.d/ | grep -ciE "vscode|microsoft")'
+    ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
+    'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
     'echo CK_$((1+1))_DONE'
   )
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
-  wait_for 'CK_2_DONE' 240 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
+  wait_for 'CK_2_DONE' 600 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
   local failed=0
   expect() { # expect MARKER DESCRIPTION
     if grep -q "$1" "$log"; then echo "ok   $2"; else echo "FAIL $2 (wanted $1)" >&2; failed=1; fi
@@ -148,6 +153,14 @@ run_checks() {
   expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
   expect 'CK14_ca_1_in_firefox' 'Firefox trusts this stick'"'"'s own Squid CA (policy installed it)'
   expect 'CK15_mozilla_deb_no_snap' 'Firefox is the pinned Mozilla package and there is no snap'
+  expect 'CK16_exit_0' 'every contest language compiles and runs a program as the contestant'
+  local language
+  for language in c cpp java python3 kotlin; do
+    if grep -q "ck-toolchain ok $language " "$log"; then echo "ok   $(grep -m1 "ck-toolchain ok $language " "$log" | tr -d '\r')"; else echo "FAIL language $language" >&2; failed=1; fi
+  done
+  if grep -q '^missing_' "$log"; then echo "FAIL an IDE is missing: $(grep -o '^missing_[a-z]*' "$log" | tr '\n' ' ')" >&2; failed=1; else echo 'ok   VS Code, Code::Blocks and Geany are installed'; fi
+  expect 'CK17_ms_repo_files_0' 'VS Code did not add the Microsoft apt repository'
+  expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
 }
