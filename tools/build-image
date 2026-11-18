@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
+# No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
+# Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub.
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--debug-login]
+set -euo pipefail
+
+SUITE=noble
+MIRROR=${CK_MIRROR:-http://archive.ubuntu.com/ubuntu}
+OUT=build
+SIZE=8G
+DEBUG_LOGIN=0
+VERSION=$(cat "$(dirname "$0")/../version.txt" 2>/dev/null || echo 0.0.0)
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --out) OUT=$2; shift 2 ;;
+    --size) SIZE=$2; shift 2 ;;
+    --debug-login) DEBUG_LOGIN=1; shift ;; # empty root password, for the QEMU smoke test only
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ $EUID -ne 0 ]]; then echo "run as root" >&2; exit 1; fi
+
+mkdir -p "$OUT"
+IMG=$OUT/keeper-os-$VERSION.img
+MNT=$(mktemp -d)
+LOOP=
+
+cleanup() {
+  set +e
+  for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m" 2>/dev/null; done
+  umount "$MNT" 2>/dev/null
+  [[ -n $LOOP ]] && losetup -d "$LOOP"
+  rmdir "$MNT" 2>/dev/null
+}
+trap cleanup EXIT
+
+# Same inputs give the same package set only if the mirror is a pinned snapshot; the package list is
+# recorded next to the image either way.
+echo "== partition $IMG ($SIZE)"
+rm -f "$IMG"
+truncate -s "$SIZE" "$IMG"
+# 1 MB BIOS boot, 128 MB ESP, 16 MB config (CKCONFIG, used from step 3), rest root.
+sfdisk "$IMG" <<'EOF'
+label: gpt
+size=1MiB, type=21686148-6449-6E6F-744E-656564454649
+size=128MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+EOF
+LOOP=$(losetup --find --show --partscan "$IMG")
+mkfs.vfat -F 32 -n EFI "${LOOP}p2" >/dev/null
+mkfs.vfat -F 16 -n CKCONFIG "${LOOP}p3" >/dev/null
+mkfs.ext4 -q -L CKROOT "${LOOP}p4"
+
+echo "== mount and install base system"
+mount "${LOOP}p4" "$MNT"
+mkdir -p "$MNT/boot/efi"
+mount "${LOOP}p2" "$MNT/boot/efi"
+# The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
+mmdebstrap --skip=check/empty --variant=minbase --components=main,universe \
+  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
+  "$SUITE" "$MNT" "$MIRROR"
+
+echo "== configure"
+cat >"$MNT/etc/fstab" <<'EOF'
+LABEL=CKROOT / ext4 noatime,errors=remount-ro 0 1
+LABEL=EFI /boot/efi vfat umask=0077 0 1
+LABEL=CKCONFIG /mnt/ckconfig vfat noauto,nofail,ro 0 0
+EOF
+mkdir -p "$MNT/mnt/ckconfig"
+echo keeper-os >"$MNT/etc/hostname"
+
+# Grow the root partition to fill the disk at every boot; does nothing once it is full size.
+cat >"$MNT/usr/local/sbin/ck-grow-root" <<'EOF'
+#!/bin/sh
+root=$(findmnt -no SOURCE /)
+disk=/dev/$(lsblk -no PKNAME "$root" | head -1)
+part=$(cat "/sys/class/block/$(basename "$root")/partition" 2>/dev/null)
+[ -b "$disk" ] && [ -n "$part" ] || exit 0
+if growpart "$disk" "$part"; then resize2fs "$root"; fi
+exit 0
+EOF
+chmod 0755 "$MNT/usr/local/sbin/ck-grow-root"
+cat >"$MNT/etc/systemd/system/ck-grow-root.service" <<'EOF'
+[Unit]
+Description=Grow the root partition to fill the stick
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ck-grow-root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Serial console as well as the screen, so the QEMU smoke test can see the login prompt.
+mkdir -p "$MNT/etc/default/grub.d"
+cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"
+GRUB_TIMEOUT=1
+GRUB_TERMINAL="console serial"
+GRUB_SERIAL_COMMAND="serial --speed=115200"
+EOF
+
+if [[ $DEBUG_LOGIN -eq 1 ]]; then
+  chroot "$MNT" passwd -d root
+fi
+
+echo "== boot loader"
+for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
+chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service
+# --removable writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
+chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot
+chroot "$MNT" update-grub
+# shellcheck disable=SC2016 # dpkg-query expands these, not the shell
+chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
+
+echo "== finish"
+cleanup
+trap - EXIT
+zstd -T0 -19 -f "$IMG" -o "$IMG.zst"
+(cd "$OUT" && sha256sum "$(basename "$IMG.zst")" >"$(basename "$IMG.zst").sha256")
+echo "built $IMG.zst"

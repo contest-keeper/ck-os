@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Boot a built image in QEMU (UEFI) and wait for the login prompt on the serial console.
+# Usage: tools/qemu-smoke build/keeper-os-<version>.img [timeout-seconds]
+# Needs qemu-system-x86_64 and OVMF (package ovmf). Uses KVM when /dev/kvm exists.
+set -euo pipefail
+
+image=${1:?usage: qemu-smoke IMAGE [timeout]}
+timeout_s=${2:-240}
+ovmf=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+
+accel=tcg
+[[ -w /dev/kvm ]] && accel=kvm
+
+# snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
+timeout "$timeout_s" qemu-system-x86_64 \
+  -machine q35,accel=$accel -m 2048 -smp 2 -display none \
+  -drive if=pflash,format=raw,readonly=on,file="$ovmf" \
+  -drive file="$image",format=raw,snapshot=on \
+  -serial "file:$log" -no-reboot &
+qemu=$!
+
+for _ in $(seq 1 "$timeout_s"); do
+  if grep -q 'login:' "$log"; then
+    kill "$qemu" 2>/dev/null || true
+    echo "PASS: login prompt reached"
+    exit 0
+  fi
+  sleep 1
+done
+kill "$qemu" 2>/dev/null || true
+echo "FAIL: no login prompt within ${timeout_s}s; last console lines:" >&2
+tail -20 "$log" >&2
+exit 1
