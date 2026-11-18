@@ -6,14 +6,15 @@ Where it matters, ask a lawyer or the vendor. The decisions it touches are 1 (th
 
 ## Policy (decision 14)
 
-Prefer permissive licences (MIT, Apache-2.0, BSD, ISC) wherever there is a real choice.
+Our code stays Apache-2.0 and its dependencies stay permissive. In the image, GPL and LGPL software is welcome when it helps, as long as
+we meet its conditions.
 
-- **Our code:** stays Apache-2.0. Its Rust dependencies are limited to permissive licences by the `[licenses]` allow list in each
-  repository's `deny.toml`, checked by `cargo deny` on every PR.
-- **The image:** the system itself cannot be all MIT. The Linux kernel, the GNU tools, Squid and XFCE are GPL or LGPL, and there is no
-  practical permissive replacement. They are accepted as separate programs, never linked into our code, with the source offer below.
-  Where a permissive choice exists we take it (VSCodium instead of Microsoft's VS Code, Apache-2.0 Kotlin).
-- **Never in the published image:** anything proprietary or not redistributable.
+- **Our code:** stays Apache-2.0. Its Rust dependencies are limited to permissive licences (MIT, Apache-2.0, BSD, ISC and similar) by the
+  `[licenses]` allow list in each repository's `deny.toml`, checked by `cargo deny` on every PR.
+- **The image:** the Linux kernel, the GNU tools, Squid, XFCE, Code::Blocks and Geany are GPL or LGPL. We may use any such software, as a
+  separate program that is never linked into our code, if we keep every notice and licence text and publish the source offer below.
+- **Never in the published image:** anything proprietary or not redistributable. This is why the editor is VSCodium (MIT) and not
+  Microsoft's VS Code binary, which is not GPL but a proprietary licence that forbids redistribution.
 - **A new component** (a package, an editor, an extension) needs a licence check and a line in the table below before it is added.
 
 Why this matters: decision 1 means **we publish** an image that contains other people's software. Publishing is redistribution,
