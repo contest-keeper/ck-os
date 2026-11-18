@@ -119,6 +119,9 @@ run_checks() {
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
     'su -s /bin/sh contestant -c "sudo -n true" >/dev/null 2>&1; echo CK12_sudo_$?'
+    'timeout 120 su - contestant -c "firefox --headless --screenshot /tmp/ff.png about:blank" >/dev/null 2>&1; echo CK13_firefox_$?'
+    'echo CK14_ca_$(certutil -L -d sql:$(dirname $(find /home/contestant -name cert9.db | head -1)) 2>/dev/null | grep -c "Keeper OS contest CA")_in_firefox'
+    'dpkg -s firefox | grep -q "^Version: 160.0.1" && ! command -v snap >/dev/null && echo CK15_mozilla_deb_no_snap'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
     'echo CK_$((1+1))_DONE'
@@ -142,6 +145,9 @@ run_checks() {
   expect 'CK9_pkcheck_1' 'polkit says the contestant may not change the network (rule in place)'
   if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else echo "FAIL control: polkit refused even without the rule" >&2; failed=1; fi
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
+  expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
+  expect 'CK14_ca_1_in_firefox' 'Firefox trusts this stick'"'"'s own Squid CA (policy installed it)'
+  expect 'CK15_mozilla_deb_no_snap' 'Firefox is the pinned Mozilla package and there is no snap'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
 }

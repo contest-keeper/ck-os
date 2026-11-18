@@ -47,13 +47,27 @@ done
 # shellcheck source-path=SCRIPTDIR
 source "$REPO/image/patch/lib/image-tools.sh"
 
-# curl only on the test image (--debug-login): the smoke test uses it to prove the allowlist. Contestants get none.
+# Firefox from Mozilla's own repository (Ubuntu's package is a snap, which cannot run here). The exact file is
+# pinned by URL and SHA-256, so the image does not change when Mozilla publishes a new version; change both
+# lines together to update it (the SHA-256 is in the repository's Packages index).
+FIREFOX_URL='https://packages.mozilla.org/apt/pool/mozilla/firefox_160.0.1~build1_amd64_639e349c3ccea1748e38ec80e90a9eb6.deb'
+FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
+CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
+
+# curl and certutil only on the test image (--debug-login): the smoke test uses them to prove the allowlist
+# and that Firefox trusts the CA. Contestants get none.
 EXTRA_PACKAGES=
-[[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl
+[[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl,libnss3-tools
 
 if [[ $EUID -ne 0 ]]; then echo "run as root" >&2; exit 1; fi
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$CACHE"
+# Downloaded once and checked every time, so a changed or damaged file stops the build.
+firefox_deb=$CACHE/firefox-${FIREFOX_SHA256:0:12}.deb
+if ! echo "$FIREFOX_SHA256  $firefox_deb" | sha256sum -c --status 2>/dev/null; then
+  curl -fsSL "$FIREFOX_URL" -o "$firefox_deb"
+  echo "$FIREFOX_SHA256  $firefox_deb" | sha256sum -c --status || { echo "ERROR: the Firefox package does not match its pinned SHA-256" >&2; exit 1; }
+fi
 IMG=$OUT/keeper-os-$VERSION.img
 MNT=$(mktemp -d)
 LOOP=
@@ -91,11 +105,17 @@ E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKROOT -U "$ROOT_UUID" -E
 echo "== mount and install base system"
 mount "${LOOP}p4" "$MNT"
 mkdir -p "$MNT/boot/efi"
+# mmdebstrap copies the file in under a fixed name.
+cp "$firefox_deb" "$WORK/firefox.deb"
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time.
+# shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
 mmdebstrap --skip=check/empty --variant=minbase \
-  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --customize-hook="copy-in $WORK/firefox.deb /tmp" \
+  --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb' \
+  --customize-hook='rm -f "$1"/tmp/firefox.deb' \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \
