@@ -153,3 +153,103 @@ fn leaves_no_temporary_files_and_replaces_old_content() {
         .collect();
     assert!(names.iter().all(|n| !n.ends_with(".ck-tmp")), "{names:?}");
 }
+
+#[test]
+fn the_bluetooth_block_is_written_when_asked_and_removed_when_not() {
+    let blocked = SETTINGS.replace(
+        r#""team": " Team A ","#,
+        r#""block_bluetooth": true, "team": " Team A ","#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert_eq!(
+        read(&dir, "etc/ck/block-bluetooth"),
+        "1
+"
+    );
+
+    // The next boot has settings without the block: the old marker must not stay behind.
+    fs::write(dir.path().join("boot/efi/ck/config.json"), SETTINGS).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(!dir.path().join("etc/ck/block-bluetooth").exists());
+}
+
+fn with_wifi(settings_json: &str) -> String {
+    settings_json.replace(
+        r#""team": " Team A ","#,
+        r#""wifi": {"ssid": "Venue Net", "password": "p@ss w0rd\\"}, "team": " Team A ","#,
+    )
+}
+
+#[test]
+fn writes_the_wifi_connection_for_networkmanager_and_keeps_the_secret_to_two_private_files() {
+    let (dir, root) = stick(&with_wifi(SETTINGS));
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+
+    let connection = read(
+        &dir,
+        "etc/NetworkManager/system-connections/ck-wifi.nmconnection",
+    );
+    assert!(connection.contains("ssid=Venue Net\n"));
+    assert!(connection.contains("key-mgmt=wpa-psk\n"));
+    // The backslash at the end of the password is doubled for the keyfile reader.
+    assert!(connection.contains("psk=p@ss w0rd\\\\\n"), "{connection}");
+
+    // Every file that holds the password must be root-only; none of the readable ones may.
+    let allowed = [
+        "etc/NetworkManager/system-connections/ck-wifi.nmconnection",
+        "etc/ck/config.json",
+        "boot/efi/ck/config.json",
+    ];
+    let mut found = Vec::new();
+    collect(dir.path(), dir.path(), &mut found);
+    for (relative, content) in found {
+        if content.contains("w0rd") {
+            assert!(
+                allowed.contains(&relative.as_str()),
+                "{relative} has the secret"
+            );
+            #[cfg(unix)]
+            if relative != "boot/efi/ck/config.json" {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(dir.path().join(&relative))
+                    .expect("metadata")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o077, 0, "{relative} is readable by others");
+            }
+        }
+    }
+}
+
+fn collect(base: &std::path::Path, folder: &std::path::Path, out: &mut Vec<(String, String)>) {
+    for entry in fs::read_dir(folder).expect("folder").flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(base, &path, out);
+        } else if let Ok(text) = fs::read_to_string(&path) {
+            let relative = path.strip_prefix(base).expect("inside");
+            out.push((relative.to_string_lossy().replace('\\', "/"), text));
+        }
+    }
+}
+
+#[test]
+fn an_open_network_has_no_security_section_and_a_removed_network_removes_the_file() {
+    let open = SETTINGS.replace(
+        r#""team": " Team A ","#,
+        r#""wifi": {"ssid": "Guest"}, "team": " Team A ","#,
+    );
+    let (dir, root) = stick(&open);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    let path = "etc/NetworkManager/system-connections/ck-wifi.nmconnection";
+    let connection = read(&dir, path);
+    assert!(connection.contains("ssid=Guest\n") && !connection.contains("wifi-security"));
+
+    fs::write(dir.path().join("boot/efi/ck/config.json"), SETTINGS).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(
+        !dir.path().join(path).exists(),
+        "the old network does not stay"
+    );
+}

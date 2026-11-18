@@ -10,6 +10,7 @@ use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
+mod hub_commands;
 mod self_test;
 
 /// The settings file is missing, so the image keeps its defaults. The service treats this
@@ -143,9 +144,41 @@ fn apply_config(root: &Root) -> ExitCode {
     }
     if root.is_real_root() {
         set_running_hostname(&loaded.config.computer_name());
+        if loaded.config.settings.block_bluetooth {
+            block_bluetooth();
+        }
+        if loaded.config.settings.wifi.is_some() {
+            reload_network_connections();
+        }
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
+}
+
+/// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not
+/// kept across reboots on every machine. A machine without the tool or a radio is not an error.
+fn block_bluetooth() {
+    match std::process::Command::new("rfkill")
+        .args(["block", "bluetooth"])
+        .status()
+    {
+        Ok(status) if status.success() => tracing::info!("Bluetooth blocked"),
+        Ok(status) => tracing::warn!("rfkill could not block Bluetooth ({status})"),
+        Err(error) => tracing::warn!("cannot run rfkill, Bluetooth is not blocked: {error}"),
+    }
+}
+
+/// Makes `NetworkManager` read the connection files again, so the venue network is known even when
+/// `NetworkManager` started before the agent. No password is on the command line.
+fn reload_network_connections() {
+    match std::process::Command::new("nmcli")
+        .args(["connection", "reload"])
+        .status()
+    {
+        Ok(status) if status.success() => tracing::info!("network connections reloaded"),
+        Ok(status) => tracing::warn!("nmcli could not reload the connections ({status})"),
+        Err(error) => tracing::warn!("cannot run nmcli: {error}"),
+    }
 }
 
 /// The login and the submissions go to the Hub on every stick. The shape of the traffic is written
@@ -348,19 +381,32 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
             now(),
             recorder_state(root, uplink.recording_mode(), running),
         );
-        let result = uplink.send(&url, &heartbeat);
+        let result = uplink.send_heartbeat(&url, &heartbeat);
         // Say it once when reporting starts to fail and once when it works again, not every 15 s.
         match &result {
-            Ok(()) if failing => {
+            Ok(_) if failing => {
                 failing = false;
                 tracing::info!(seq = heartbeat.seq, "reporting to the Hub again");
             }
-            Ok(()) if heartbeat.seq == 1 => tracing::info!("the first heartbeat was accepted"),
+            Ok(_) if heartbeat.seq == 1 => tracing::info!("the first heartbeat was accepted"),
             Err(error) if !failing => {
                 failing = true;
                 tracing::warn!("the heartbeat failed, trying again every interval: {error}");
             }
-            Ok(()) | Err(_) => {}
+            Ok(_) | Err(_) => {}
+        }
+        // The Hub's commands come with its answer. They run before the events are sent, so the
+        // acknowledgements leave in the same round.
+        if let (Ok(reply), Some(queue)) = (&result, &queue)
+            && !reply.commands.is_empty()
+        {
+            let ran = uplink.process_commands(
+                queue,
+                &reply.commands,
+                now(),
+                &hub_commands::SystemExecutor,
+            );
+            tracing::info!(received = reply.commands.len(), ran, "Hub commands handled");
         }
         if let (Some(queue), Some(events_url)) = (&queue, uplink.events_url()) {
             match uplink.flush(queue, &events_url) {

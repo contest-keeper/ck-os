@@ -41,6 +41,15 @@ pub struct Applied {
     pub welcome_text: Option<String>,
     /// Whether the picture the admin chose is the machine's team wallpaper, byte for byte.
     pub wallpaper_is_team_wallpaper: Option<bool>,
+    /// `/etc/ck/block-bluetooth` exists: the agent was told to block Bluetooth.
+    pub bluetooth_block_requested: bool,
+    /// What the kernel says about the Bluetooth radios (`/sys/class/rfkill`): `Some(true)` when
+    /// every one is soft or hard blocked, `None` when the machine has none (a VM, usually).
+    pub bluetooth_blocked: Option<bool>,
+    /// The network name in the `ck-wifi` `NetworkManager` connection. The password is never read.
+    pub wifi_ssid: Option<String>,
+    /// The connection file is readable by root only (mode 0600). `None` where modes do not exist.
+    pub wifi_profile_private: Option<bool>,
 }
 
 /// What `systemctl is-active` and `is-enabled` say about one service.
