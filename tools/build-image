@@ -80,7 +80,7 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time.
 mmdebstrap --skip=check/empty --variant=minbase \
-  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
+  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \
@@ -123,6 +123,7 @@ EOF
 mkdir -p "$MNT/etc/default/grub.d"
 cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"
+GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TIMEOUT=1
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
@@ -135,8 +136,15 @@ fi
 echo "== boot loader"
 for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
 chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service
-# --removable writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
-chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot
+# UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
+# --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
+chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --uefi-secure-boot
+# The signed GRUB found with --removable looks for its config in /boot/grub on the ESP, not next to itself
+# (checked in QEMU), so put the stub that grub-install wrote there as well. It points at the root filesystem.
+mkdir -p "$MNT/boot/efi/boot/grub"
+cp "$MNT/boot/efi/EFI/BOOT/grub.cfg" "$MNT/boot/efi/boot/grub/grub.cfg"
+# Legacy BIOS: boot code in the MBR, core image in the BIOS boot partition (partition 1).
+chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
 chroot "$MNT" update-grub
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
