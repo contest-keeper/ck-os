@@ -3,10 +3,27 @@
 # No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub.
 # Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--debug-login]
+# Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
+# snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
+# docs/base-images.md for what is and is not identical between two builds.
 set -euo pipefail
 
 SUITE=noble
-MIRROR=${CK_MIRROR:-http://archive.ubuntu.com/ubuntu}
+# Snapshot timestamp (UTC, format YYYYMMDDTHHMMSSZ). Change it on purpose to take newer security fixes.
+SNAPSHOT=${CK_SNAPSHOT:-20261117T000000Z}
+MIRROR=${CK_MIRROR:-https://snapshot.ubuntu.com/ubuntu/$SNAPSHOT}
+# Every timestamp in the image is clamped to the snapshot time unless the caller sets it.
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
+export SOURCE_DATE_EPOCH
+# Fixed IDs so two builds do not differ in UUIDs (fixed values, not secrets).
+DISK_GUID=6b8a1c10-0000-4c4b-8000-000000000001
+ESP_GUID=6b8a1c10-0000-4c4b-8000-000000000002
+CFG_GUID=6b8a1c10-0000-4c4b-8000-000000000003
+ROOT_GUID=6b8a1c10-0000-4c4b-8000-000000000004
+ROOT_UUID=6b8a1c10-0000-4c4b-8000-0000000000a4
+HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b4
+ESP_SERIAL=6B8A0002
+CFG_SERIAL=6B8A0003
 OUT=build
 SIZE=8G
 DEBUG_LOGIN=0
@@ -37,32 +54,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Same inputs give the same package set only if the mirror is a pinned snapshot; the package list is
-# recorded next to the image either way.
+# The package list is recorded next to the image. With a custom CK_MIRROR the build is not pinned.
 echo "== partition $IMG ($SIZE)"
 rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
 # 1 MB BIOS boot, 128 MB ESP, 16 MB config (CKCONFIG, used from step 3), rest root.
-sfdisk "$IMG" <<'EOF'
+sfdisk "$IMG" <<EOF
 label: gpt
-size=1MiB, type=21686148-6449-6E6F-744E-656564454649
-size=128MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+label-id: $DISK_GUID
+size=1MiB, type=21686148-6449-6E6F-744E-656564454649, uuid=6b8a1c10-0000-4c4b-8000-000000000000
+size=128MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=$ESP_GUID
+size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=$CFG_GUID
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$ROOT_GUID
 EOF
 LOOP=$(losetup --find --show --partscan "$IMG")
-mkfs.vfat -F 32 -n EFI "${LOOP}p2" >/dev/null
-mkfs.vfat -F 16 -n CKCONFIG "${LOOP}p3" >/dev/null
-mkfs.ext4 -q -L CKROOT "${LOOP}p4"
+mkfs.vfat -F 32 -n EFI -i "$ESP_SERIAL" "${LOOP}p2" >/dev/null
+mkfs.vfat -F 16 -n CKCONFIG -i "$CFG_SERIAL" "${LOOP}p3" >/dev/null
+# E2FSPROGS_FAKE_TIME fixes the creation time; hash_seed and the UUID are otherwise random.
+E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKROOT -U "$ROOT_UUID" -E hash_seed="$HASH_SEED" "${LOOP}p4"
 
 echo "== mount and install base system"
 mount "${LOOP}p4" "$MNT"
 mkdir -p "$MNT/boot/efi"
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
-mmdebstrap --skip=check/empty --variant=minbase --components=main,universe \
+# Three suites: release, updates and security, all from the same snapshot time.
+mmdebstrap --skip=check/empty --variant=minbase \
   --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
-  "$SUITE" "$MNT" "$MIRROR"
+  "$SUITE" "$MNT" \
+  "deb $MIRROR $SUITE main universe" \
+  "deb $MIRROR $SUITE-updates main universe" \
+  "deb $MIRROR $SUITE-security main universe"
 
 echo "== configure"
 cat >"$MNT/etc/fstab" <<'EOF'
@@ -118,6 +140,19 @@ chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --remov
 chroot "$MNT" update-grub
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
+
+echo "== make the root filesystem reproducible"
+for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m"; done
+# Files that hold build time, random or per-run data and are rebuilt by the system on first boot.
+rm -f "$MNT/var/cache/ldconfig/aux-cache" "$MNT/var/log/alternatives.log" "$MNT/var/log/dpkg.log" \
+  "$MNT/var/log/apt/history.log" "$MNT/var/log/apt/term.log" "$MNT/var/log/bootstrap.log" "$MNT/var/log/faillog" \
+  "$MNT/var/log/lastlog"
+: >"$MNT/etc/machine-id"
+find "$MNT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+# Hash of the root filesystem content (names, modes, owners, mtimes, data), sorted. The ESP is a separate
+# filesystem and is left out by --one-file-system. The bind mounts are gone, so nothing changes while reading.
+tar -C "$MNT" --one-file-system --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . \
+  | sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
 
 echo "== finish"
 cleanup
