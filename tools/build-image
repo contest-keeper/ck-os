@@ -95,7 +95,7 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time.
 mmdebstrap --skip=check/empty --variant=minbase \
-  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \
@@ -118,6 +118,7 @@ install_payload() {
   done < <(list_payload_paths "$payload" f)
   # Programs payload_file_mode does not know (it names the ICPC patch's own files).
   if [[ -d $payload/usr/local/sbin ]]; then chmod 0755 "$payload"/usr/local/sbin/*; fi
+  if [[ -f $payload/usr/local/bin/ck-wallpaper ]]; then chmod 0755 "$payload/usr/local/bin/ck-wallpaper"; fi
   cp -r --no-preserve=ownership "$payload/." "$MNT/"
 }
 install_payload "$REPO/image/patch/rootfs" patch
@@ -179,6 +180,19 @@ GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
 EOF
 
+# Accounts. The contestant logs in by itself (lightdm drop-in) and has no password. The admin account has
+# sudo only with a password, and its password is locked here: the per-contest hash is set by Forge through
+# the agent (admin_password_hash), so no password is known in advance (decisions 3 and 10). Root is locked.
+# The password change date is fixed, or /etc/shadow would differ between two builds.
+last_change=$(date -u -d "@$SOURCE_DATE_EPOCH" +%F)
+chroot "$MNT" useradd --create-home --shell /bin/bash contestant
+chroot "$MNT" useradd --create-home --shell /bin/bash --groups sudo ckadmin
+for account in contestant ckadmin root; do
+  chroot "$MNT" passwd --lock "$account" >/dev/null
+  chroot "$MNT" chage --lastday "$last_change" "$account"
+done
+# ck-agent writes the team wallpaper here, and ck-wallpaper shows it.
+install -d -m 0755 "$MNT/icpc"
 if [[ $DEBUG_LOGIN -eq 1 ]]; then
   chroot "$MNT" passwd -d root
 fi
