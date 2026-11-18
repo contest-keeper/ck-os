@@ -58,8 +58,10 @@ source "$REPO/image/patch/lib/image-tools.sh"
 #   from its GitHub release (the release has a .sha256 file).
 # - The clangd extension for VSCodium (MIT), from Open VSX, so no Microsoft-only extension is needed.
 # - The Kotlin compiler, from JetBrains' release (the release has a .sha256 file).
+FIREFOX_VERSION='160.0.1~build1'
 FIREFOX_URL='https://packages.mozilla.org/apt/pool/mozilla/firefox_160.0.1~build1_amd64_639e349c3ccea1748e38ec80e90a9eb6.deb'
 FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
+CODIUM_VERSION='1.143.17232'
 CODIUM_URL='https://github.com/VSCodium/vscodium/releases/download/1.143.17232/codium_1.143.17232_amd64.deb'
 CODIUM_SHA256=988330df203f4d2dbfb9ee0052a0356a27af7c0a2a7ff606424c531ae4a7b538
 CLANGD_VSIX_URL='https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/0.6.0/file/llvm-vs-code-extensions.vscode-clangd-0.6.0.vsix'
@@ -221,6 +223,7 @@ cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TIMEOUT=1
+GRUB_DISTRIBUTOR="Keeper OS"
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
 EOF
@@ -244,6 +247,39 @@ fi
 
 echo "== boot loader"
 for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
+
+echo "== remove Ubuntu branding, add the source offer"
+# Canonical lets only unmodified Ubuntu carry its trademarks (docs/licences.md), so the artwork and boot-screen
+# packages go, the system names itself Keeper OS, and GRUB's entries say Keeper OS (GRUB_DISTRIBUTOR above).
+# The two Xubuntu metapackages go with them: they only list packages, and removing them leaves the desktop
+# (xfce4-session, lightdm, xubuntu-default-settings) installed. dpkg is told to ignore the missing dependencies
+# on removed artwork; nothing installs packages on a contest stick afterwards.
+BRANDING_PACKAGES=(xubuntu-core xubuntu-desktop-minimal xubuntu-artwork xubuntu-wallpapers ubuntu-mono
+  plymouth-theme-ubuntu-text plymouth-theme-xubuntu-logo plymouth-theme-xubuntu-text)
+chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
+cat >"$MNT/usr/lib/os-release" <<EOF
+PRETTY_NAME="Keeper OS $VERSION"
+NAME="Keeper OS"
+VERSION_ID="$VERSION"
+VERSION="$VERSION"
+VERSION_CODENAME=noble
+ID=keeper-os
+ID_LIKE=debian
+HOME_URL="https://github.com/contest-keeper/ck-os"
+UBUNTU_CODENAME=noble
+EOF
+ln -sfn ../usr/lib/os-release "$MNT/etc/os-release"
+rm -f "$MNT/etc/lsb-release" "$MNT/etc/legal"
+mkdir -p "$MNT/usr/share/doc/keeper-os"
+printf 'Keeper OS %s \\n \\l\n\n' "$VERSION" >"$MNT/etc/issue"
+printf 'Keeper OS %s\n' "$VERSION" >"$MNT/etc/issue.net"
+# The GPL source offer: next to the image (and in the CI upload) and inside the image.
+sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERSION@|$CODIUM_VERSION|g" \
+  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$REPO/image/SOURCE-OFFER.txt.in" >"$OUT/SOURCE-OFFER.txt"
+install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
+install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
+# One network manager (NetworkManager): systemd-networkd would also configure the links, so it is masked.
+chroot "$MNT" systemctl mask systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
 chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service   ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service
 # UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
 # --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
@@ -273,6 +309,29 @@ ln -sfn /run/systemd/resolve/resolv.conf "$MNT/etc/resolv.conf"
 # Things that must never be in the image: a CA (each stick makes its own) and printing (decision 8).
 if [[ -e $MNT/etc/ck/squid-ca ]] || ls "$MNT"/usr/local/share/ca-certificates/ck-* >/dev/null 2>&1; then
   echo "ERROR: the image holds a Squid CA" >&2
+  exit 1
+fi
+# Publishing rules (decisions 6 and 14, docs/licences.md): no Ubuntu trademarks left in what a user sees, no
+# Microsoft VS Code, and every installed package keeps its licence notice.
+if grep -qE '^(xubuntu-core|xubuntu-desktop-minimal|xubuntu-artwork|xubuntu-wallpapers|ubuntu-mono|plymouth-theme-(ubuntu|xubuntu)[a-z-]*|code) ' "$OUT/keeper-os-$VERSION.packages.txt"; then
+  echo "ERROR: a branding or Microsoft package is still installed" >&2
+  exit 1
+fi
+if grep -iE '^(menuentry|submenu) ' "$MNT/boot/grub/grub.cfg" | grep -qi ubuntu; then
+  echo "ERROR: a GRUB menu entry still says Ubuntu" >&2
+  exit 1
+fi
+if grep -qi ubuntu "$MNT/etc/issue" "$MNT/etc/issue.net" || ! grep -q '^NAME="Keeper OS"$' "$MNT/etc/os-release"; then
+  echo "ERROR: os-release or the login banner still names Ubuntu" >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # dpkg-query expands the format, not the shell
+missing_notice=$(chroot "$MNT" dpkg-query -W -f='${Package}\n' | while read -r package; do
+  [[ -e $MNT/usr/share/doc/$package/copyright ]] || echo "$package"
+done)
+if [[ -n $missing_notice ]]; then
+  echo "ERROR: these packages have no /usr/share/doc/<package>/copyright:" >&2
+  echo "$missing_notice" >&2
   exit 1
 fi
 if grep -q '^cups' "$OUT/keeper-os-$VERSION.packages.txt"; then

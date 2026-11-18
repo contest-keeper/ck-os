@@ -125,6 +125,8 @@ run_checks() {
     'dpkg -s firefox | grep -q "^Version: 160.0.1" && ! command -v snap >/dev/null && echo CK15_mozilla_deb_no_snap'
     'su - contestant -c "ck-toolchains --run"; echo CK16_exit_$?'
     'for c in codium codeblocks geany clangd; do command -v $c >/dev/null || echo missing_$c; done; echo CK17_ms_repo_files_$(ls /etc/apt/sources.list.d/ | grep -ciE "vscode|microsoft"); test -f /usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd/package.json && echo CK19_clangd_$((3+4)); grep -q chat.disableAIFeatures /home/contestant/.config/VSCodium/User/settings.json && echo CK20_ai_$((1+1)); dpkg -l code 2>/dev/null | grep -c ^ii | sed s/^/CK21_msvscode_/'
+    '. /etc/os-release; echo CK22_name_${ID}_$((1+1)); grep -ciE "^(menuentry|submenu).*ubuntu" /boot/grub/grub.cfg | sed s/^/CK23_grub_ubuntu_/; dpkg -l "*xubuntu-artwork*" "ubuntu-mono" "xubuntu-wallpapers" "plymouth-theme-*ubuntu*" 2>/dev/null | grep -c ^ii | sed s/^/CK24_brandpkgs_/; test -s /usr/share/doc/keeper-os/SOURCE-OFFER.txt && echo CK25_offer_$((2+3))'
+    'echo CK26_networkd_$(systemctl is-enabled systemd-networkd 2>&1)_$(systemctl is-active systemd-networkd 2>&1)_nm_$(systemctl is-active NetworkManager)'
     ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
     'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
@@ -163,6 +165,11 @@ run_checks() {
   expect 'CK19_clangd_7' 'the clangd extension is preinstalled in VSCodium'
   expect 'CK20_ai_2' 'the VSCodium AI assistant is disabled in the default settings'
   expect 'CK21_msvscode_0' 'Microsoft VS Code (package code) is not installed'
+  expect 'CK22_name_keeper-os_2' 'the system names itself Keeper OS (os-release)'
+  expect 'CK23_grub_ubuntu_0' 'no GRUB menu entry says Ubuntu'
+  expect 'CK24_brandpkgs_0' 'the Ubuntu and Xubuntu artwork and boot-theme packages are gone'
+  expect 'CK25_offer_5' 'SOURCE-OFFER.txt is in /usr/share/doc/keeper-os'
+  expect 'CK26_networkd_masked_inactive_nm_active' 'systemd-networkd is masked and NetworkManager is the one network manager'
   expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
