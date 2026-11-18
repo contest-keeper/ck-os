@@ -51,6 +51,7 @@ case $mode in
     # OVMF_VARS_4M.ms.fd already holds the Microsoft keys with Secure Boot enabled; Canonical's shim is
     # signed by the Microsoft UEFI CA. SMM must be on for the secure firmware.
     cp "$ovmf_dir/OVMF_VARS_4M.ms.fd" "$vars"
+    # shellcheck disable=SC2054 # the commas belong to the -machine option string
     args+=(-machine "q35,accel=$accel,smm=on"
       -global driver=cfi.pflash01,property=secure,value=on
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.secboot.fd"
