@@ -1,0 +1,8 @@
+// Keeper OS: the contestant may not change the network. Stock NetworkManager lets a user in a local
+// session add and change connections (a hotspot, a VPN, another Wi-Fi), and root-run NetworkManager
+// is allowed past the network lock. The preset Wi-Fi is written by ck-agent at boot instead.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "contestant" && action.id.indexOf("org.freedesktop.NetworkManager.") === 0) {
+    return polkit.Result.NO;
+  }
+});
