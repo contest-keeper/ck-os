@@ -1,6 +1,6 @@
-# Licences and trademarks for the Keeper OS image (draft, 2026-11-18)
+# Licences and trademarks for the Keeper OS image (2026-11-18)
 
-Status: **draft for the owners to approve.** This is a summary of the published terms, read on 2026-11-18, not legal advice.
+Status: **approved by the owner on 2026-11-18** (the Canonical question is still to be sent, see `docs/canonical-question.md`). This is a summary of the published terms, read on 2026-11-18, not legal advice.
 Where it matters, ask a lawyer or the vendor. The decisions it touches are 1 (the image is built in CI and downloaded), 6
 (VSCodium, Code::Blocks and Geany only) and 14 (licence policy), in `sessions/DECISIONS.md` of the planning workspace.
 
