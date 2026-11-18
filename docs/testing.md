@@ -48,13 +48,36 @@ ck-forge image build --base C:\rcpc-test\ck-os-base.img --out C:\rcpc-test\my-st
 The base copy is only read by `image build`. To test a newer agent on an existing test stick, run
 `tools/patch-image.ps1` on that stick again: the patch can be applied repeatedly.
 
+## Manual proofs (2026-11-18, ICPC-based stick, QEMU with WHPX)
+
+`ck-vmtest` does not cover these three, so they were run by hand. Every run used `snapshot=on` (nothing is
+written to the image). Evidence (serial logs, screenshots, the probe script) is kept outside git.
+
+1. **Boot after the locked GRUB menu.** With the menu showing (`recordfail` set), the menu appeared at 6 s with
+   "executed automatically in 3s", no password prompt, and the desktop with autologin was on screen at 32 s, with no
+   key pressed. The self-test report arrived at 20 s uptime with `ck-netlock` active. Editing (`e`) and the
+   command line stay closed: that was shown with the lock change itself (an empty login is rejected) and was not
+   repeated in this run.
+2. **The network lock blocks the contestant.** After a normal boot, a probe unit on a test copy printed: `ck-netlock`,
+   NetworkManager, systemd-networkd, Squid and `ck-capture` active; the `ck_netlock` table loaded; `eth0` has a
+   lease; `curl http://1.1.1.1` as root returns HTTP 301, while the same as `nobody` and as `contestant` times out;
+   `/etc/resolv.conf` names only the router's DNS server.
+3. **The lock fails closed.** With `/etc/ck/netlock.nft` replaced by an invalid ruleset on a copy, `ck-netlock`
+   failed (exit 1), NetworkManager and systemd-networkd stayed inactive, `eth0` was DOWN with no address, no
+   `ck_netlock` table existed, and `curl` failed immediately for root, `nobody` and `contestant`. The only failed
+   unit was `ck-netlock`. No network without the lock.
+
+How: boot a copy-on-write snapshot over QMP, take screenshots, and read the serial port. For 2 and 3 the probe was
+a throwaway unit written into a scratch copy of the stick with `debugfs` (the same way `tools/patch-image.ps1`
+works); the copy was deleted afterwards. Injecting the unit with systemd credentials over SMBIOS did not work on
+this image's systemd.
+
 ## Not covered
 
-- That the network lock really blocks a contestant. The test only sees that `ck-netlock` loaded the
-  ruleset; try a direct `curl` as the contest user on a booted stick (it must fail, while the proxy works).
-  The ruleset assumes Squid runs as `proxy`; check that on a new base image.
-  Also check that `/etc/resolv.conf` shows the router's DNS server and that `resolvectl query` fails.
-
+- That the proxy still serves the allowed sites while the lock is on (Squid was active, but no request went
+  through it). The ruleset assumes Squid runs as `proxy`; check that on a new base image.
+  Also check that `resolvectl query` fails for the contestant.
+- The same proofs on Keeper OS (the generic image) and under Secure Boot or legacy BIOS (lane A, tasks A2 and A3).
 - Real hardware (A.9) and a physical USB stick.
 - Anything that needs a contestant to log in, such as login detection (phase B).
 - CI: it needs the large image and virtualization, so it runs on a developer machine.
