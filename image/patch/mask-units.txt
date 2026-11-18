@@ -42,3 +42,8 @@ iscsid.socket
 
 # The contest's own screen recorder, replaced by ck-recorder
 icpc-screen-record.service
+
+# Remote login. The network lock already drops everything that comes in, so nothing is lost; this
+# keeps the login closed even if the lock ever fails.
+ssh.service
+ssh.socket
