@@ -54,12 +54,16 @@ source "$REPO/image/patch/lib/image-tools.sh"
 # and SHA-256 together.
 # - Firefox, from Mozilla's repository (Ubuntu's package is a snap, which cannot run here). The SHA-256 is in
 #   the repository's Packages index.
-# - VS Code, from Microsoft (the update API names the file and its SHA-256).
+# - VSCodium (the MIT build of VS Code; Microsoft's VS Code binary may not be redistributed, decisions 6 and 14),
+#   from its GitHub release (the release has a .sha256 file).
+# - The clangd extension for VSCodium (MIT), from Open VSX, so no Microsoft-only extension is needed.
 # - The Kotlin compiler, from JetBrains' release (the release has a .sha256 file).
 FIREFOX_URL='https://packages.mozilla.org/apt/pool/mozilla/firefox_160.0.1~build1_amd64_639e349c3ccea1748e38ec80e90a9eb6.deb'
 FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
-VSCODE_URL='https://vscode.download.prss.microsoft.com/dbazure/download/stable/8a14f0cc1b08d531eb83255ea3764ae22aa932b5/code_1.147.0-1794903003_amd64.deb'
-VSCODE_SHA256=749efcdf5008a8323d76773b836199cdecf708fdb993f0f0544d9475176837ab
+CODIUM_URL='https://github.com/VSCodium/vscodium/releases/download/1.143.17232/codium_1.143.17232_amd64.deb'
+CODIUM_SHA256=988330df203f4d2dbfb9ee0052a0356a27af7c0a2a7ff606424c531ae4a7b538
+CLANGD_VSIX_URL='https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/0.6.0/file/llvm-vs-code-extensions.vscode-clangd-0.6.0.vsix'
+CLANGD_VSIX_SHA256=32030694fa6c0ef438f4e4219f84677cd32f603c7faa4c71a283efc1f5b51751
 KOTLIN_URL='https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip'
 KOTLIN_SHA256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
 CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
@@ -121,7 +125,8 @@ echo "== mount and install base system"
 mount "${LOOP}p4" "$MNT"
 mkdir -p "$MNT/boot/efi"
 fetch_pinned "$FIREFOX_URL" "$FIREFOX_SHA256" firefox.deb
-fetch_pinned "$VSCODE_URL" "$VSCODE_SHA256" code.deb
+fetch_pinned "$CODIUM_URL" "$CODIUM_SHA256" codium.deb
+fetch_pinned "$CLANGD_VSIX_URL" "$CLANGD_VSIX_SHA256" clangd.vsix
 fetch_pinned "$KOTLIN_URL" "$KOTLIN_SHA256" kotlin.zip
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
@@ -129,13 +134,13 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # answers 503 for a while, so apt retries each download.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
 mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' \
-  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
-  --customize-hook="copy-in $WORK/firefox.deb $WORK/code.deb $WORK/kotlin.zip /tmp" \
-  --customize-hook='echo "code code/add-microsoft-repo boolean false" | chroot "$1" debconf-set-selections' \
-  --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/code.deb' \
+  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
+  --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
   --customize-hook='chroot "$1" unzip -q /tmp/kotlin.zip -d /opt' \
   --customize-hook='for t in kotlinc kotlin kotlinc-jvm; do ln -sfn /opt/kotlinc/bin/$t "$1"/usr/local/bin/$t; done' \
-  --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/code.deb "$1"/tmp/kotlin.zip' \
+  --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
+  --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \

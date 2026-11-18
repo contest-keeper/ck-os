@@ -84,17 +84,21 @@ The signed GRUB looks for its config in `/boot/grub` on the ESP, so `build-image
 ### What the image contains and what is pinned (A3)
 
 Packages from Ubuntu (snapshot): the XFCE desktop (`xubuntu-core`), `build-essential` (gcc, g++), OpenJDK 21, Python 3,
-Code::Blocks, Geany, Squid with TLS interception, nftables. Not installed: `cups` (the build stops if it appears),
+Code::Blocks, Geany, clangd, Squid with TLS interception, nftables. Not installed: `cups` (the build stops if it appears),
 snap, curl and certutil (those two only on the `--debug-login` test image).
 
-Three programs are not in Ubuntu as a usable package and are downloaded as exact files, pinned by URL and SHA-256
+Four downloads are not in Ubuntu as a usable package. They are downloaded as exact files, pinned by URL and SHA-256
 in `tools/build-image` (a mismatch stops the build; the files are cached in `~/.cache/ck-os-build`):
 
 | Program | Version | Why |
 |---|---|---|
 | Firefox | 160.0.1~build1 (Mozilla's deb) | Ubuntu's package is a snap, which cannot run here |
-| VS Code | 1.147.0 (Microsoft's deb, no Microsoft apt repository added) | not in Ubuntu |
+| VSCodium | 1.143.17232 (the project's deb from GitHub; MIT, not Microsoft's VS Code, decisions 6 and 14) | not in Ubuntu |
+| clangd extension | 0.6.0 (Open VSX, MIT; unpacked into VSCodium's `extensions` folder) | language support without a Microsoft-only extension |
 | Kotlin compiler | 2.4.21 (JetBrains' zip, in `/opt/kotlinc`) | Ubuntu's kotlin is very old |
+
+VSCodium starts with telemetry, updates, extension auto-update and the built-in AI assistant (`chat.disableAIFeatures`) off, set in
+`/etc/skel` (`image/keeper/rootfs/etc/skel/.config/VSCodium/User/settings.json`). Its embedded terminal is closed in step A4.
 
 `ck-toolchains --run` (in the image) compiles and runs a small program in each of c, cpp, java, python3 and kotlin as
 the current user and prints one line per language.
