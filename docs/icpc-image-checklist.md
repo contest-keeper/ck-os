@@ -48,15 +48,18 @@ Under `/opt`: `kotlinc`, `kotlin-docs`, `gradle`, `m2`, `cpp-docs`, `libc-manual
 `/icpc/supported_languages`: `c`, `cpp`, `java`, `python3`, `kotlin`. `self_test` probes many more; treat the
 five as the required set and the rest as optional.
 
-## Open questions for the contest owners
+## Owner answers (recorded 2026-11-18)
 
-1. Desktop: keep XFCE (Xubuntu-style)?
-2. Browser: Firefox only, or Chrome as well?
-3. IDEs: which of VS Code, Code::Blocks, Geany, Eclipse, NetBeans, IntelliJ, PyCharm, CLion? Commercial ones need licences.
-4. Languages: only c, cpp, java, python3, kotlin?
-5. Keep the 192 MB shared FAT "usb drive" for the contestant, or drop it?
-6. Printing: needed?
-7. Admin account: keep passwordless sudo for `icpcadmin`?
+Answered by the project owner in the lane A session. ICAP fail-open or fail-closed (#39) is still open.
+
+1. Desktop: **XFCE** (Xubuntu-style, `xubuntu-core`).
+2. Browser: **Firefox only**.
+3. IDEs: **free only**: VS Code, Code::Blocks, Geany. No Eclipse, NetBeans, IntelliJ or PyCharm for now
+   (no licence work needed yet, #31).
+4. Languages: **c, cpp, java 21, python3, kotlin** (the required set).
+5. FAT share (#30): **dropped**. Partition 3 is `CKCONFIG` only.
+6. Printing (#40): **not needed**. Do not install `cups`.
+7. Admin account (#36): **no blanket NOPASSWD**; own password hash set per contest, not an ICPC default.
 
 ## Facts to carry over
 

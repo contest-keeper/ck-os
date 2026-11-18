@@ -1,0 +1,25 @@
+# Contestant desktop: threat list (input for lockdown, lane A item #18)
+
+Scope: what the `contestant` user must not be able to do on a Keeper OS stick during a contest. Each row says
+what to block, how, and how we test it as `contestant`.
+
+| # | Threat | Block with | Test |
+|---|--------|-----------|------|
+| 1 | Terminal or shell (menu, `Ctrl+Alt+T`, file manager "open terminal", IDE embedded terminal) | Remove terminal packages/launchers, xfce kiosk files, drop shortcut bindings; IDE terminal off where the IDE allows | No launcher, shortcut does nothing, `xterm`/`xfce4-terminal` absent |
+| 2 | Privilege escalation (`sudo`, `su`, `pkexec`, polkit prompts) | `contestant` not in `sudo`/`adm`; no sudoers entry except the reset helper; no polkit allow rules for it | `sudo -n true` and `pkexec true` fail |
+| 3 | Network bypass (own proxy, VPN, tethering, changing NetworkManager) | `ck-netlock` nftables fail-closed; polkit rule removing "add/modify connection"; no `nmcli` permission | `nmcli connection add` denied; direct connect to a non-allowed IP fails |
+| 4 | Adding Wi-Fi | Same as 3 (#37); preset Wi-Fi comes from CKCONFIG, root-owned `0600` | Denied for contestant |
+| 5 | USB storage and phones | `usb-storage`/`uas` blocked (modprobe blacklist plus udisks policy); no automount | Plugging a stick shows nothing, `lsblk` lacks it |
+| 6 | Bluetooth | `rfkill block bluetooth`, module blacklist (#3) | `rfkill list` blocked |
+| 7 | Printing | `cups` not installed (#40) | No print dialog target, no `lpstat` |
+| 8 | Browser reaching other sites or local files | Squid allow-list, `file://` and `view-source` limited by Firefox policy, no downloads outside home, no extensions install | `file:///etc/` blocked, non-allowed domain denied |
+| 9 | TLS interception abuse (trusting other CAs, `sslproxy_cert_error`) | Deny by default cert errors (#38); per-stick CA only (#17) | Self-signed test host blocked |
+| 10 | Killing or tampering with the agent, recorder, Squid, netlock | Root-owned units, `ProtectSystem`, contestant cannot `kill` root processes; no write to `/etc`, `/usr`, `/opt` | `systemctl stop ck-agent` and file edits fail |
+| 11 | Shutting down or rebooting to escape (GRUB edit, boot menu, other OS) | GRUB locked (existing menu-lock branch), `systemctl poweroff` limited, no TTY switch (`Ctrl+Alt+F*`) | GRUB edit needs password, TTY switch does nothing |
+| 12 | Data exfil by clipboard, screen sharing, remote tools (ssh, scp, curl, nc) | No ssh/remote packages on contestant path, nft allow-list only | `curl` to a non-allowed host fails |
+| 13 | Reading other contestants or admin data (`/home/*`, `/ck-config`, token) | `/ck-config` root-only 0700 or read via agent only; `/home` mode 0750 | `cat /ck-config/*` denied |
+| 14 | Persistence across reset (cron, autostart, `~/.config`) | Reset recreates `contestant` from template (#16); no cron for the user | After reset, home matches template |
+| 15 | Screen lock bypass and sleep | Lock screen only via Hub command (#1); screensaver passwordless guard decided with lane B | Manual lock unavailable or agent-controlled |
+
+Open decisions that affect this list: ICAP fail-open or fail-closed (#39), whether the IDE embedded terminal can
+be disabled per IDE (VS Code `terminal.integrated` policy).
