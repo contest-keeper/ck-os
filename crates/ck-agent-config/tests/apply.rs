@@ -93,7 +93,7 @@ fn refuses_missing_or_bad_settings_without_writing_anything() {
     let (_dir, root) = stick("not json");
     assert!(matches!(load(&root), Err(Error::SettingsUnreadable(_))));
 
-    let (dir, root) = stick(&SETTINGS.replace(r#""schema": 1"#, r#""schema": 2"#));
+    let (dir, root) = stick(&SETTINGS.replace(r#""schema": 1"#, r#""schema": 3"#));
     let error = load(&root).expect_err("wrong schema");
     assert!(matches!(error, Error::SettingsInvalid(_)));
     assert!(!dir.path().join("etc").exists());

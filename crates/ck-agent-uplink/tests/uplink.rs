@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use chrono::{DateTime, Utc};
 use ck_agent_uplink::{Error, Queue, Uplink, recorder_state};
 use ck_protocol::{
-    EventKind, FIRST_PREV_HASH, Heartbeat, RecorderState, RecordingMode, Token, verify_chain,
+    EventKind, FIRST_PREV_HASH, Heartbeat, RecorderState, RecordingMode, Timestamp, Token,
+    verify_chain,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -118,7 +118,7 @@ fn machine(root: &Path, url: &str) {
     }
 }
 
-fn time() -> DateTime<Utc> {
+fn time() -> Timestamp {
     "2026-11-12T10:00:00Z".parse().expect("time")
 }
 

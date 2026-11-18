@@ -200,10 +200,15 @@ fn follow_proxy_log(root: &std::path::Path, events: &std::sync::Arc<dyn ck_captu
     let log = root.join(PROXY_LOG);
     let state = root.join(NETWORK_STATE);
     let events = std::sync::Arc::clone(events);
-    let since = chrono::Utc::now().timestamp() - uptime_seconds(root);
+    let since = time::OffsetDateTime::now_utc().unix_timestamp() - uptime_seconds(root);
     std::thread::spawn(move || {
         ck_capture::follow_network(&log, &state, since, &events, NETWORK_INTERVAL);
     });
+}
+
+/// The stick's clock, in UTC.
+fn now() -> ck_protocol::Timestamp {
+    ck_protocol::Timestamp::from(time::OffsetDateTime::now_utc())
 }
 
 /// Seconds since the machine started, so lines of an earlier boot in the log are not reported.
@@ -245,7 +250,7 @@ impl ck_capture::EventSink for QueuedEvents {
         };
         let _guard = self.one_at_a_time.lock().map_err(|e| e.to_string())?;
         self.queue
-            .push(&self.stick, &self.boot, kind, payload, chrono::Utc::now())
+            .push(&self.stick, &self.boot, kind, payload, now())
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -340,7 +345,7 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
     loop {
         let running = self_test::systemctl_state("ck-recorder").active == "active";
         let heartbeat = uplink.next_heartbeat(
-            chrono::Utc::now(),
+            now(),
             recorder_state(root, uplink.recording_mode(), running),
         );
         let result = uplink.send(&url, &heartbeat);
@@ -396,7 +401,7 @@ fn enqueue(root: &std::path::Path, kind: &str, payload: &str) -> ExitCode {
     let result = Uplink::load(root).and_then(|uplink| {
         let queue = Queue::open(root.join(QUEUE_FOLDER))?;
         let (stick, boot) = uplink.identity();
-        queue.push(stick, boot, kind, payload, chrono::Utc::now())
+        queue.push(stick, boot, kind, payload, now())
     });
     match result {
         Ok(event) => {

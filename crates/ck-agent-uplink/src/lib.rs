@@ -12,10 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use ck_protocol::{
     HEARTBEAT_PATH, Heartbeat, RecorderState, RecorderStatus, RecordingMode, SIGNATURE_HEADER,
-    STICK_HEADER, StickConfig,
+    STICK_HEADER, StickConfig, Timestamp,
 };
 
 /// The root-only copy of the settings that `ck-agent apply-config` writes at boot.
@@ -103,7 +102,7 @@ impl Uplink {
 
     /// The next heartbeat. The sequence number goes up by one each time, starting at 1 every boot,
     /// so the Hub can see when a message was lost.
-    pub fn next_heartbeat(&mut self, now: DateTime<Utc>, recorder: RecorderState) -> Heartbeat {
+    pub fn next_heartbeat(&mut self, now: Timestamp, recorder: RecorderState) -> Heartbeat {
         self.seq += 1;
         if let Err(error) = save_sequence(&self.root, &self.boot_id, self.seq) {
             tracing::warn!("the heartbeat sequence cannot be kept: {error}");
