@@ -13,12 +13,12 @@ workspace = true
 ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
 ck-agent-uplink = { path = "../ck-agent-uplink", version = "0.1.0" }
 ck-capture = { path = "../ck-capture", version = "0.1.0" }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "4aa1e0fcc12b80b30382060351802acbd4231444", version = "0.1.0" }
-ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "4aa1e0fcc12b80b30382060351802acbd4231444", version = "0.1.0" }
+ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "e3db30a1eeb3ba4d715478624a32aa45192d8a5a", version = "0.1.0" }
+ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "e3db30a1eeb3ba4d715478624a32aa45192d8a5a", version = "0.1.0" }
 ck-selftest = { path = "../ck-selftest", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }
 serde_json = "1.0.154"
+time = { version = "0.3.47", default-features = false, features = ["std"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std"] }
 

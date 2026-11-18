@@ -9,8 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
-use ck_protocol::{Event, EventKind, FIRST_PREV_HASH, StickId};
+use ck_protocol::{Event, EventKind, FIRST_PREV_HASH, StickId, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -53,7 +52,7 @@ impl Queue {
         boot_id: &str,
         kind: EventKind,
         payload: Value,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<Event, Error> {
         let size = serde_json::to_vec(&payload).map_or(0, |bytes| bytes.len());
         if size > MAX_PAYLOAD_BYTES {
