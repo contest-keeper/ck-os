@@ -255,6 +255,130 @@ verify_squid_include() {
   fi
 }
 
+GRUB_CONFIG=/boot/grub/grub.cfg
+
+# custom.cfg (a payload file) sets a superuser whose password nobody knows. That also closes the
+# normal boot unless every entry at the top of the menu is marked --unrestricted, so this marks them.
+# The submenu "Advanced options" (its recovery mode is a root shell) and the entries inside it stay
+# locked. Marking is skipped for an entry that already has it, so applying the patch again is safe.
+queue_grub_lock() {
+  local filesystem=$1
+  local work_directory=$2
+  local commands_file=$3
+  local grub_file="$work_directory/grub.cfg"
+  debugfs -R "dump $GRUB_CONFIG $grub_file" "$filesystem" 2>/dev/null
+  if ! grep -q '^menuentry ' "$grub_file" 2>/dev/null; then
+    echo "ERROR: no menu entries in $GRUB_CONFIG, so GRUB cannot be locked; nothing was applied" >&2
+    return 1
+  fi
+  # Without the line that reads custom.cfg the superuser is never set and the lock does nothing.
+  if ! grep -q 'custom\.cfg' "$grub_file"; then
+    echo "ERROR: $GRUB_CONFIG does not read custom.cfg, so GRUB cannot be locked; nothing was applied" >&2
+    return 1
+  fi
+  sed -i '/^menuentry .*--unrestricted/!s/^menuentry /menuentry --unrestricted /' "$grub_file"
+  queue_image_file "$grub_file" "$GRUB_CONFIG" 0100600 "$commands_file"
+}
+
+verify_grub_lock() {
+  local filesystem=$1
+  local grub_config entry details actual_mode actual_owner
+  local verification_failed=0
+  grub_config=$(debugfs -R "cat $GRUB_CONFIG" "$filesystem" 2>/dev/null)
+  if ! grep -q '^menuentry ' <<<"$grub_config"; then
+    echo "MISSING menu entries in $GRUB_CONFIG"
+    return 1
+  fi
+  # An entry without --unrestricted would ask for the superuser's password, and the stick would
+  # not boot.
+  while IFS= read -r entry; do
+    if [[ "$entry" != *--unrestricted* ]]; then
+      echo "NOT UNRESTRICTED ${entry:0:70}"
+      verification_failed=1
+    fi
+  done < <(grep '^menuentry ' <<<"$grub_config")
+  details=$(debugfs -R "stat $GRUB_CONFIG" "$filesystem" 2>/dev/null)
+  actual_mode=$(sed -n 's/.*Mode: *\([0-7]*\).*/\1/p' <<<"$details")
+  actual_owner=$(sed -n 's/^User: *\([0-9]*\) *Group: *\([0-9]*\).*/\1:\2/p' <<<"$details")
+  if [[ "$actual_mode" != 0600 || "$actual_owner" != 0:0 ]]; then
+    echo "WRONG PERMISSIONS $GRUB_CONFIG (mode ${actual_mode:-?}, owner ${actual_owner:-?})"
+    verification_failed=1
+  fi
+  return "$verification_failed"
+}
+
+# Prints a group file without one member in one group. Only that group's line is touched. The member
+# list is the last field in /etc/group and in /etc/gshadow.
+remove_group_member() {
+  local group_name=$1
+  local member=$2
+  local file=$3
+  awk -F: -v OFS=: -v group_name="$group_name" -v member="$member" '
+    $1 == group_name {
+      count = split($NF, members, ",")
+      kept = ""
+      for (i = 1; i <= count; i++) {
+        if (members[i] != member && members[i] != "") {
+          kept = kept (kept == "" ? "" : ",") members[i]
+        }
+      }
+      $NF = kept
+    }
+    { print }
+  ' "$file"
+}
+
+# lpadmin lets its members administer CUPS, which runs as root, and root may use the network (see
+# netlock.nft). A printer the contestant added at any address would carry data past Squid. Printing
+# a file needs no group, so the contestant leaves it.
+queue_group_cleanup() {
+  local filesystem=$1
+  local work_directory=$2
+  local commands_file=$3
+  local group_file="$work_directory/group"
+  local gshadow_file="$work_directory/gshadow"
+  debugfs -R "dump /etc/group $group_file.old" "$filesystem" 2>/dev/null
+  debugfs -R "dump /etc/gshadow $gshadow_file.old" "$filesystem" 2>/dev/null
+  if [[ ! -s "$group_file.old" || ! -s "$gshadow_file.old" ]]; then
+    echo "ERROR: no /etc/group or /etc/gshadow in the image; nothing was applied" >&2
+    return 1
+  fi
+  remove_group_member lpadmin contestant "$group_file.old" >"$group_file"
+  remove_group_member lpadmin contestant "$gshadow_file.old" >"$gshadow_file"
+  queue_image_file "$group_file" /etc/group 0100644 "$commands_file"
+  queue_image_file "$gshadow_file" /etc/gshadow 0100640 "$commands_file"
+  # Group shadow (42) reads this file; queue_image_file made it root's.
+  printf 'sif /etc/gshadow gid 42\n' >>"$commands_file"
+}
+
+verify_group_cleanup() {
+  local filesystem=$1
+  local file details actual_mode actual_owner expected_mode expected_owner
+  local verification_failed=0
+  for file in /etc/group /etc/gshadow; do
+    if debugfs -R "cat $file" "$filesystem" 2>/dev/null |
+      awk -F: '$1 == "lpadmin" { n = split($NF, m, ","); for (i = 1; i <= n; i++) if (m[i] == "contestant") found = 1 } END { exit !found }'; then
+      echo "STILL IN lpadmin: contestant, in $file"
+      verification_failed=1
+    fi
+    if [[ "$file" == /etc/gshadow ]]; then
+      expected_mode=0640
+      expected_owner=0:42
+    else
+      expected_mode=0644
+      expected_owner=0:0
+    fi
+    details=$(debugfs -R "stat $file" "$filesystem" 2>/dev/null)
+    actual_mode=$(sed -n 's/.*Mode: *\([0-7]*\).*/\1/p' <<<"$details")
+    actual_owner=$(sed -n 's/^User: *\([0-9]*\) *Group: *\([0-9]*\).*/\1:\2/p' <<<"$details")
+    if [[ "$actual_mode" != "$expected_mode" || "$actual_owner" != "$expected_owner" ]]; then
+      echo "WRONG PERMISSIONS $file (mode ${actual_mode:-?}, owner ${actual_owner:-?})"
+      verification_failed=1
+    fi
+  done
+  return "$verification_failed"
+}
+
 apply_image_commands() {
   local filesystem=$1
   local commands_file=$2

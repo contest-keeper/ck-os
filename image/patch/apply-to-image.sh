@@ -58,6 +58,8 @@ queue_enabled_service ck-uplink.service multi-user.target "$commands_file"
 queue_enabled_service ck-capture.service multi-user.target "$commands_file"
 queue_squid_include "$filesystem" "$work_directory" "$commands_file"
 queue_efi_permissions "$filesystem" "$work_directory" "$commands_file"
+queue_grub_lock "$filesystem" "$work_directory" "$commands_file"
+queue_group_cleanup "$filesystem" "$work_directory" "$commands_file"
 
 # 4. Apply the command list to the image.
 apply_image_commands "$filesystem" "$commands_file" "$work_directory"
@@ -77,6 +79,8 @@ verify_enabled_service ck-uplink.service multi-user.target "$filesystem" || veri
 verify_enabled_service ck-capture.service multi-user.target "$filesystem" || verification_failed=1
 verify_squid_include "$filesystem" || verification_failed=1
 verify_efi_permissions "$filesystem" || verification_failed=1
+verify_grub_lock "$filesystem" || verification_failed=1
+verify_group_cleanup "$filesystem" || verification_failed=1
 verify_filesystem "$filesystem" "$work_directory" || verification_failed=1
 
 if [[ "$verification_failed" == 0 ]]; then

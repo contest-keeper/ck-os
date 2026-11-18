@@ -32,6 +32,25 @@ state_file = Path(os.environ["FAKE_STATE"])
 
 FSTAB = os.environ.get("FAKE_FSTAB", "UUID=example /boot/efi vfat defaults 0 1\n")
 SQUID = "http_port 3128\nacl allowed_domains dstdomain \"/etc/squid/acl_allowed_domains.txt\"\n"
+# The top of a real grub.cfg: the line that reads custom.cfg, two entries, and a submenu whose
+# indented entry is the recovery mode.
+GRUB = (
+    "set default=\"0\"\n"
+    "menuentry 'Ubuntu' --class ubuntu {\n\trecordfail\n}\n"
+    "submenu 'Advanced options for Ubuntu' {\n"
+    "\tmenuentry 'Ubuntu, with Linux (recovery mode)' --class os {\n\t\trecordfail\n\t}\n}\n"
+    "if [ -f  ${config_directory}/custom.cfg ]; then\n  source ${config_directory}/custom.cfg\nfi\n"
+    "menuentry 'Contest system (safe graphics)' {\n  linux /boot/vmlinuz nomodeset\n}\n"
+)
+if os.environ.get("NO_GRUB"):
+    GRUB = ""
+if os.environ.get("GRUB_WITHOUT_CUSTOM"):
+    GRUB = GRUB.replace("custom.cfg", "other.cfg")
+GROUP = "root:x:0:\nlpadmin:x:113:icpcadmin,contestant\ncontestant:x:1004:\n"
+GSHADOW = "root:*::\nlpadmin:!::icpcadmin,contestant\ncontestant:!::\n"
+if os.environ.get("NO_GROUP"):
+    GROUP = ""
+ORIGINALS = {"/boot/grub/grub.cfg": GRUB, "/etc/group": GROUP, "/etc/gshadow": GSHADOW}
 
 
 def names(variable):
@@ -99,6 +118,8 @@ elif tool == "debugfs":
             if parts[1] == "/etc/squid/squid.conf":
                 original = "" if os.environ.get("NO_SQUID") else SQUID
                 Path(parts[2]).write_text(state["files"].get(parts[1], original))
+            elif parts[1] in ORIGINALS:
+                Path(parts[2]).write_text(state["files"].get(parts[1], ORIGINALS[parts[1]]))
             else:
                 Path(parts[2]).write_text(FSTAB)
         elif parts[0] == "cat":
@@ -107,6 +128,12 @@ elif tool == "debugfs":
                 content = FSTAB  # The image's original fstab, if the patch did not replace it.
             if parts[1] == "/etc/squid/squid.conf" and parts[1] not in state["files"]:
                 content = SQUID
+            if parts[1] in ORIGINALS and parts[1] not in state["files"]:
+                content = ORIGINALS[parts[1]]
+            if os.environ.get("GROUP_STAYS") and parts[1] == "/etc/group":
+                content = GROUP  # as if the change never reached the image
+            if os.environ.get("RESTRICTED_ENTRY") and parts[1] == "/boot/grub/grub.cfg":
+                content += "menuentry 'Left locked' {\n}\n"
             if os.environ.get("CORRUPT_FILE") == parts[1]:
                 content = "corrupted file\n"
             sys.stdout.buffer.write(content.encode("latin-1"))
@@ -330,6 +357,73 @@ class ImagePatchTests(unittest.TestCase):
         result = self.run_patch(CORRUPT_FILE="/etc/squid/squid.conf")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MISSING include /etc/squid/ck-capture.conf", result.stdout)
+
+    def test_marks_the_top_menu_entries_unrestricted_and_keeps_the_submenu_locked(self):
+        for _ in range(2):  # the second run is the patch applied again
+            self.assertEqual(self.run_patch().returncode, 0)
+        files = json.loads(self.state_file.read_text())["files"]
+        lines = files["/boot/grub/grub.cfg"].splitlines()
+        self.assertIn("menuentry --unrestricted 'Ubuntu' --class ubuntu {", lines)
+        self.assertIn("menuentry --unrestricted 'Contest system (safe graphics)' {", lines)
+        self.assertNotIn("--unrestricted", "\n".join(line for line in lines if line.startswith(("submenu", "\t"))))
+        self.assertTrue(all(line.count("--unrestricted") <= 1 for line in lines), "marked once only")
+        self.assertIn("sif /boot/grub/grub.cfg mode 0100600\n", self.commands_file.read_text())
+
+    def test_fails_without_menu_entries_or_without_the_line_that_reads_custom_cfg(self):
+        for variable in ("NO_GRUB", "GRUB_WITHOUT_CUSTOM"):
+            with self.subTest(variable=variable):
+                result = self.run_patch(**{variable: "1"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("GRUB cannot be locked", result.stderr)
+
+    def test_fails_when_a_top_menu_entry_would_ask_for_a_password(self):
+        result = self.run_patch(RESTRICTED_ENTRY="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NOT UNRESTRICTED menuentry 'Left locked'", result.stdout)
+
+    def test_fails_when_grub_config_has_wrong_permissions(self):
+        result = self.run_patch(SKIP_MODES="/boot/grub/grub.cfg")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WRONG PERMISSIONS /boot/grub/grub.cfg", result.stdout)
+
+    def test_takes_the_contestant_out_of_lpadmin_and_keeps_everything_else(self):
+        for _ in range(2):
+            self.assertEqual(self.run_patch().returncode, 0)
+        files = json.loads(self.state_file.read_text())["files"]
+        self.assertEqual(files["/etc/group"], "root:x:0:\nlpadmin:x:113:icpcadmin\ncontestant:x:1004:\n")
+        self.assertEqual(files["/etc/gshadow"], "root:*::\nlpadmin:!::icpcadmin\ncontestant:!::\n")
+        commands = self.commands_file.read_text()
+        self.assertIn("sif /etc/group mode 0100644\n", commands)
+        self.assertIn("sif /etc/gshadow mode 0100640\n", commands)
+        self.assertIn("sif /etc/gshadow gid 42\n", commands)
+
+    def test_fails_without_group_files_in_the_image(self):
+        result = self.run_patch(NO_GROUP="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no /etc/group or /etc/gshadow", result.stderr)
+
+    def test_fails_when_the_contestant_is_still_in_lpadmin_afterwards(self):
+        result = self.run_patch(GROUP_STAYS="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("STILL IN lpadmin: contestant, in /etc/group", result.stdout)
+
+    def test_fails_when_gshadow_loses_its_group(self):
+        result = self.run_patch(SKIP_MODES="/etc/gshadow")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WRONG PERMISSIONS /etc/gshadow", result.stdout)
+
+    def test_the_real_boot_lock_network_lock_and_ssh_files_are_in_the_patch(self):
+        custom = (PATCH / "rootfs" / "boot" / "grub" / "custom.cfg").read_text()
+        self.assertIn('set superusers="ck"', custom)
+        self.assertRegex(custom, r"(?m)^password_pbkdf2 ck grub\.pbkdf2\.sha512\.\d+\.[0-9A-F]+\.[0-9A-F]+$")
+        masked = (PATCH / "mask-units.txt").read_text().split()
+        self.assertIn("ssh.service", masked)
+        self.assertIn("ssh.socket", masked)
+        for unit in ("systemd-networkd", "NetworkManager"):
+            with self.subTest(unit=unit):
+                drop_in = (PATCH / "rootfs" / "etc" / "systemd" / "system" / f"{unit}.service.d" / "10-ck.conf").read_text()
+                self.assertIn("\nRequires=ck-netlock.service\n", drop_in)
+                self.assertIn("\nAfter=ck-netlock.service\n", drop_in)
 
     def test_fails_when_filesystem_check_fails(self):
         result = self.run_patch(FAIL_FSCK="1")
