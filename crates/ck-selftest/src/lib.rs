@@ -41,6 +41,11 @@ pub struct Applied {
     pub welcome_text: Option<String>,
     /// Whether the picture the admin chose is the machine's team wallpaper, byte for byte.
     pub wallpaper_is_team_wallpaper: Option<bool>,
+    /// `/etc/ck/block-bluetooth` exists: the agent was told to block Bluetooth.
+    pub bluetooth_block_requested: bool,
+    /// What the kernel says about the Bluetooth radios (`/sys/class/rfkill`): `Some(true)` when
+    /// every one is soft or hard blocked, `None` when the machine has none (a VM, usually).
+    pub bluetooth_blocked: Option<bool>,
 }
 
 /// What `systemctl is-active` and `is-enabled` say about one service.

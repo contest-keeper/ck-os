@@ -8,7 +8,7 @@ mod error;
 mod load;
 mod root;
 
-pub use apply::apply_basics;
+pub use apply::{BLOCK_BLUETOOTH, apply_basics};
 pub use branding::apply_branding;
 pub use error::Error;
 pub use load::{Loaded, load};

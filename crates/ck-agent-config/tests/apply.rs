@@ -153,3 +153,23 @@ fn leaves_no_temporary_files_and_replaces_old_content() {
         .collect();
     assert!(names.iter().all(|n| !n.ends_with(".ck-tmp")), "{names:?}");
 }
+
+#[test]
+fn the_bluetooth_block_is_written_when_asked_and_removed_when_not() {
+    let blocked = SETTINGS.replace(
+        r#""team": " Team A ","#,
+        r#""block_bluetooth": true, "team": " Team A ","#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert_eq!(
+        read(&dir, "etc/ck/block-bluetooth"),
+        "1
+"
+    );
+
+    // The next boot has settings without the block: the old marker must not stay behind.
+    fs::write(dir.path().join("boot/efi/ck/config.json"), SETTINGS).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(!dir.path().join("etc/ck/block-bluetooth").exists());
+}

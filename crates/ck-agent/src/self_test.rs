@@ -113,7 +113,30 @@ fn applied(root: &Path) -> Applied {
         firefox_home_page,
         welcome_text: read_trimmed(root, "etc/ck/welcome.txt"),
         wallpaper_is_team_wallpaper: wallpaper_matches(root),
+        bluetooth_block_requested: root.join("etc/ck/block-bluetooth").exists(),
+        bluetooth_blocked: bluetooth_blocked(root),
     }
+}
+
+/// Whether every Bluetooth radio is blocked, from the kernel's own files. A radio is blocked when
+/// its `soft` or `hard` switch is 1. `None` when there is no Bluetooth radio.
+pub fn bluetooth_blocked(root: &Path) -> Option<bool> {
+    let entries = fs::read_dir(root.join("sys/class/rfkill")).ok()?;
+    let mut found = false;
+    let mut all_blocked = true;
+    for entry in entries.flatten() {
+        let folder = entry.path();
+        let kind = fs::read_to_string(folder.join("type")).unwrap_or_default();
+        if kind.trim() != "bluetooth" {
+            continue;
+        }
+        found = true;
+        let on = |name: &str| fs::read_to_string(folder.join(name)).is_ok_and(|v| v.trim() == "1");
+        if !(on("soft") || on("hard")) {
+            all_blocked = false;
+        }
+    }
+    found.then_some(all_blocked)
 }
 
 fn read_trimmed(root: &Path, relative: &str) -> Option<String> {
@@ -178,4 +201,60 @@ fn wallpaper_matches(root: &Path) -> Option<bool> {
     let on_stick = fs::read(root.join("boot/efi/ck").join(&name)).ok();
     let shown = fs::read(root.join("icpc/teamWallpaper.png")).ok();
     Some(on_stick.is_some() && on_stick == shown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn radio(root: &Path, name: &str, kind: &str, soft: &str, hard: &str) {
+        let folder = root.join("sys/class/rfkill").join(name);
+        fs::create_dir_all(&folder).expect("folder");
+        fs::write(
+            folder.join("type"),
+            format!(
+                "{kind}
+"
+            ),
+        )
+        .expect("type");
+        fs::write(
+            folder.join("soft"),
+            format!(
+                "{soft}
+"
+            ),
+        )
+        .expect("soft");
+        fs::write(
+            folder.join("hard"),
+            format!(
+                "{hard}
+"
+            ),
+        )
+        .expect("hard");
+    }
+
+    #[test]
+    fn bluetooth_is_blocked_when_every_bluetooth_radio_is() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        assert_eq!(bluetooth_blocked(dir.path()), None, "no radios at all");
+
+        radio(dir.path(), "rfkill0", "wlan", "0", "0");
+        assert_eq!(bluetooth_blocked(dir.path()), None, "wifi does not count");
+
+        radio(dir.path(), "rfkill1", "bluetooth", "1", "0");
+        assert_eq!(bluetooth_blocked(dir.path()), Some(true));
+
+        radio(dir.path(), "rfkill2", "bluetooth", "0", "1");
+        assert_eq!(
+            bluetooth_blocked(dir.path()),
+            Some(true),
+            "a hard block counts"
+        );
+
+        radio(dir.path(), "rfkill3", "bluetooth", "0", "0");
+        assert_eq!(bluetooth_blocked(dir.path()), Some(false));
+    }
 }

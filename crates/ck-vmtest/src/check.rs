@@ -85,6 +85,12 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
     if branding.wallpaper.is_some() && applied.wallpaper_is_team_wallpaper != Some(true) {
         problems.push("the wallpaper on the stick is not the machine's team wallpaper".to_owned());
     }
+    if applied.bluetooth_block_requested != settings.block_bluetooth {
+        problems.push("the Bluetooth block does not match the settings".to_owned());
+    }
+    if settings.block_bluetooth && applied.bluetooth_blocked == Some(false) {
+        problems.push("a Bluetooth radio is not blocked".to_owned());
+    }
     if !applied.config_hash_matches {
         problems.push("the stored copy of the settings does not match its hash".to_owned());
     }
@@ -261,6 +267,30 @@ mod tests {
         report.applied.recording_mode = Some("off".to_owned());
         report.units[1].active = "inactive".to_owned();
         assert_eq!(problems(&stick, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_bluetooth_block_is_checked_against_the_settings() {
+        let mut settings_on = config();
+        settings_on.settings.block_bluetooth = true;
+        let mut report = good_report();
+        assert!(
+            !problems(&settings_on, &report).is_empty(),
+            "block asked, not applied"
+        );
+
+        report.applied.bluetooth_block_requested = true;
+        assert!(
+            problems(&settings_on, &report).is_empty(),
+            "no radio in the VM is fine"
+        );
+        report.applied.bluetooth_blocked = Some(false);
+        assert!(
+            !problems(&settings_on, &report).is_empty(),
+            "a radio left on"
+        );
+        report.applied.bluetooth_blocked = Some(true);
+        assert_eq!(problems(&settings_on, &report), Vec::<String>::new());
     }
 
     #[test]
