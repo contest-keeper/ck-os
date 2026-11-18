@@ -14,6 +14,8 @@ const CONFIG_HASH: &str = "/etc/ck/config.sha256";
 const RECORDING_CONF: &str = "/etc/ck/recording.conf";
 const TEAM: &str = "/etc/ck/team";
 const SITE: &str = "/etc/ck/site";
+/// Exists while the settings ask for Bluetooth to be blocked. The self-test reads it back.
+pub const BLOCK_BLUETOOTH: &str = "/etc/ck/block-bluetooth";
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
 
 const GENERATED: &str = "# Written at boot by ck-agent from the admin tool settings\n";
@@ -53,6 +55,18 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         0o644,
     )?;
 
+    if settings.block_bluetooth {
+        write(
+            root,
+            BLOCK_BLUETOOTH,
+            b"1
+",
+            0o644,
+        )?;
+    } else {
+        remove(root, BLOCK_BLUETOOTH)?;
+    }
+
     // No sites chosen: keep the image's own list rather than block everything.
     if let Some(list) = allowlist(settings) {
         write(root, SQUID_ALLOWLIST, list.as_bytes(), 0o644)?;
@@ -60,6 +74,15 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         tracing::warn!("no allowed sites in the settings; keeping the image's list");
     }
     Ok(())
+}
+
+/// Removes a file written by an earlier boot. A file that is not there is fine.
+fn remove(root: &Root, absolute: &str) -> Result<(), Error> {
+    match fs::remove_file(root.path(absolute)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(format!("removing {absolute}"), e)),
+    }
 }
 
 /// Shell variables that `ck-recorder` reads with `.`.

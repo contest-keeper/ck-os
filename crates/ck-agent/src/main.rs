@@ -143,9 +143,25 @@ fn apply_config(root: &Root) -> ExitCode {
     }
     if root.is_real_root() {
         set_running_hostname(&loaded.config.computer_name());
+        if loaded.config.settings.block_bluetooth {
+            block_bluetooth();
+        }
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
+}
+
+/// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not
+/// kept across reboots on every machine. A machine without the tool or a radio is not an error.
+fn block_bluetooth() {
+    match std::process::Command::new("rfkill")
+        .args(["block", "bluetooth"])
+        .status()
+    {
+        Ok(status) if status.success() => tracing::info!("Bluetooth blocked"),
+        Ok(status) => tracing::warn!("rfkill could not block Bluetooth ({status})"),
+        Err(error) => tracing::warn!("cannot run rfkill, Bluetooth is not blocked: {error}"),
+    }
 }
 
 /// The login and the submissions go to the Hub on every stick. The shape of the traffic is written
