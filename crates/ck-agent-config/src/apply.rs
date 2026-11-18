@@ -3,7 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use ck_protocol::Settings;
+use ck_protocol::{Settings, Wifi};
 
 use crate::error::Error;
 use crate::load::Loaded;
@@ -14,6 +14,8 @@ const CONFIG_HASH: &str = "/etc/ck/config.sha256";
 const RECORDING_CONF: &str = "/etc/ck/recording.conf";
 const TEAM: &str = "/etc/ck/team";
 const SITE: &str = "/etc/ck/site";
+/// The Wi-Fi network of the venue, as a `NetworkManager` connection that only root can read.
+pub const WIFI_CONNECTION: &str = "/etc/NetworkManager/system-connections/ck-wifi.nmconnection";
 /// Exists while the settings ask for Bluetooth to be blocked. The self-test reads it back.
 pub const BLOCK_BLUETOOTH: &str = "/etc/ck/block-bluetooth";
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
@@ -67,6 +69,16 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         remove(root, BLOCK_BLUETOOTH)?;
     }
 
+    match &settings.wifi {
+        Some(wifi) => write(
+            root,
+            WIFI_CONNECTION,
+            wifi_connection(wifi).as_bytes(),
+            0o600,
+        )?,
+        None => remove(root, WIFI_CONNECTION)?,
+    }
+
     // No sites chosen: keep the image's own list rather than block everything.
     if let Some(list) = allowlist(settings) {
         write(root, SQUID_ALLOWLIST, list.as_bytes(), 0o644)?;
@@ -74,6 +86,54 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         tracing::warn!("no allowed sites in the settings; keeping the image's list");
     }
     Ok(())
+}
+
+/// The `NetworkManager` keyfile for the venue network. The password is only in this file, which is
+/// written with mode 0600 from the start, and in the root-only copy of the settings.
+fn wifi_connection(wifi: &Wifi) -> String {
+    let mut lines = vec![
+        "[connection]".to_owned(),
+        "id=ck-wifi".to_owned(),
+        "uuid=6f0a8d52-3c1e-4f6b-9a5d-2f7e8b1c4a90".to_owned(),
+        "type=wifi".to_owned(),
+        "autoconnect=true".to_owned(),
+        String::new(),
+        "[wifi]".to_owned(),
+        "mode=infrastructure".to_owned(),
+        format!("ssid={}", keyfile_value(&wifi.ssid)),
+        String::new(),
+    ];
+    if let Some(password) = &wifi.password {
+        lines.push("[wifi-security]".to_owned());
+        lines.push("key-mgmt=wpa-psk".to_owned());
+        lines.push(format!("psk={}", keyfile_value(password.expose())));
+        lines.push(String::new());
+    }
+    for line in ["[ipv4]", "method=auto", "", "[ipv6]", "method=auto"] {
+        lines.push(line.to_owned());
+    }
+    lines.join("\n") + "\n"
+}
+
+/// A value as the keyfile reader wants it: a backslash is written twice and a space at either end
+/// as a backslash and `s`, because the reader would drop the space.
+fn keyfile_value(value: &str) -> String {
+    let doubled = value.replace('\\', "\\\\");
+    let core = doubled.trim_matches(' ');
+    let leading = doubled.chars().take_while(|c| *c == ' ').count();
+    let trailing = if core.is_empty() {
+        0
+    } else {
+        doubled.chars().rev().take_while(|c| *c == ' ').count()
+    };
+    let space = "\\s";
+    let mut out = space.repeat(leading);
+    if core.is_empty() {
+        return out;
+    }
+    out.push_str(core);
+    out.push_str(&space.repeat(trailing));
+    out
 }
 
 /// Removes a file written by an earlier boot. A file that is not there is fine.

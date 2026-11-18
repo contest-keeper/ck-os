@@ -146,6 +146,9 @@ fn apply_config(root: &Root) -> ExitCode {
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
         }
+        if loaded.config.settings.wifi.is_some() {
+            reload_network_connections();
+        }
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
@@ -161,6 +164,19 @@ fn block_bluetooth() {
         Ok(status) if status.success() => tracing::info!("Bluetooth blocked"),
         Ok(status) => tracing::warn!("rfkill could not block Bluetooth ({status})"),
         Err(error) => tracing::warn!("cannot run rfkill, Bluetooth is not blocked: {error}"),
+    }
+}
+
+/// Makes `NetworkManager` read the connection files again, so the venue network is known even when
+/// `NetworkManager` started before the agent. No password is on the command line.
+fn reload_network_connections() {
+    match std::process::Command::new("nmcli")
+        .args(["connection", "reload"])
+        .status()
+    {
+        Ok(status) if status.success() => tracing::info!("network connections reloaded"),
+        Ok(status) => tracing::warn!("nmcli could not reload the connections ({status})"),
+        Err(error) => tracing::warn!("cannot run nmcli: {error}"),
     }
 }
 

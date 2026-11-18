@@ -115,6 +115,8 @@ fn applied(root: &Path) -> Applied {
         wallpaper_is_team_wallpaper: wallpaper_matches(root),
         bluetooth_block_requested: root.join("etc/ck/block-bluetooth").exists(),
         bluetooth_blocked: bluetooth_blocked(root),
+        wifi_ssid: wifi_ssid(root),
+        wifi_profile_private: wifi_profile_private(root),
     }
 }
 
@@ -137,6 +139,32 @@ pub fn bluetooth_blocked(root: &Path) -> Option<bool> {
         }
     }
     found.then_some(all_blocked)
+}
+
+const WIFI_CONNECTION: &str = "etc/NetworkManager/system-connections/ck-wifi.nmconnection";
+
+/// The `ssid=` line of the connection file. Only that line is looked at: the file also holds the
+/// password, which the report must never carry.
+fn wifi_ssid(root: &Path) -> Option<String> {
+    let text = fs::read_to_string(root.join(WIFI_CONNECTION)).ok()?;
+    text.lines()
+        .find_map(|line| line.strip_prefix("ssid="))
+        .map(str::to_owned)
+}
+
+#[cfg(unix)]
+fn wifi_profile_private(root: &Path) -> Option<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(root.join(WIFI_CONNECTION))
+        .ok()?
+        .permissions()
+        .mode();
+    Some(mode & 0o077 == 0)
+}
+
+#[cfg(not(unix))]
+fn wifi_profile_private(_root: &Path) -> Option<bool> {
+    None
 }
 
 fn read_trimmed(root: &Path, relative: &str) -> Option<String> {
