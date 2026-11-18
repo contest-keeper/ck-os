@@ -1,0 +1,14 @@
+[Unit]
+Description=Keeper OS: make this stick's own Squid CA at first boot
+# The image holds no CA. Each stick makes its own, so a key taken from one stick opens no other.
+DefaultDependencies=no
+After=local-fs.target
+Before=squid.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ck-squid-ca
+
+[Install]
+WantedBy=squid.service
