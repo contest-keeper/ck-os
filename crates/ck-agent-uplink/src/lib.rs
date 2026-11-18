@@ -4,8 +4,10 @@
 //! files, signed with the stick's secret and sent over a direct connection, never through the
 //! proxy settings of the contestant's session.
 
+mod commands;
 mod queue;
 
+pub use commands::Executor;
 pub use queue::{MAX_PAYLOAD_BYTES, MAX_PENDING, Queue};
 
 use std::fs;
@@ -13,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ck_protocol::{
-    HEARTBEAT_PATH, Heartbeat, RecorderState, RecorderStatus, RecordingMode, SIGNATURE_HEADER,
-    STICK_HEADER, StickConfig, Timestamp,
+    HEARTBEAT_PATH, Heartbeat, HeartbeatReply, RecorderState, RecorderStatus, RecordingMode,
+    SIGNATURE_HEADER, STICK_HEADER, StickConfig, Timestamp,
 };
 
 /// The root-only copy of the settings that `ck-agent apply-config` writes at boot.
@@ -23,6 +25,8 @@ const CONFIG_COPY: &str = "etc/ck/config.json";
 pub const EVENTS_PATH: &str = "/api/v1/events";
 /// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
 const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
+/// The most the Hub may answer with. A few commands are a few kilobytes.
+const MAX_ANSWER_BYTES: u64 = 64 * 1024;
 /// How long one heartbeat may take. A slow network must not make the next one late.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -129,8 +133,25 @@ impl Uplink {
     /// Signs `heartbeat` with the stick's secret and sends it: [`Error::Rejected`] when the Hub
     /// answers with an error status, [`Error::Unreachable`] when there is no answer.
     pub fn send(&self, url: &str, heartbeat: &Heartbeat) -> Result<(), Error> {
+        self.send_heartbeat(url, heartbeat).map(|_| ())
+    }
+
+    /// Like [`Uplink::send`], and also returns what the Hub answered: the commands for this stick.
+    /// An answer that is empty or not a reply (an older Hub) means no commands, not an error.
+    pub fn send_heartbeat(
+        &self,
+        url: &str,
+        heartbeat: &Heartbeat,
+    ) -> Result<HeartbeatReply, Error> {
         let body = serde_json::to_vec(heartbeat).expect("a heartbeat always serializes");
-        self.post(url, &body)
+        let answer = self.post(url, &body)?;
+        if answer.iter().all(u8::is_ascii_whitespace) {
+            return Ok(HeartbeatReply::default());
+        }
+        Ok(serde_json::from_slice(&answer).unwrap_or_else(|error| {
+            tracing::warn!("the Hub's answer to the heartbeat is not a reply: {error}");
+            HeartbeatReply::default()
+        }))
     }
 
     /// The address events go to, or `None` when the admin set no server.
@@ -156,7 +177,7 @@ impl Uplink {
         let mut sent = 0;
         for (counter, event) in queue.pending()? {
             match self.post(url, &event.canonical_bytes()) {
-                Ok(()) | Err(Error::Rejected(409)) => {
+                Ok(_) | Err(Error::Rejected(409)) => {
                     queue.remove(counter)?;
                     sent += 1;
                 }
@@ -174,7 +195,9 @@ impl Uplink {
         Ok(sent)
     }
 
-    fn post(&self, url: &str, body: &[u8]) -> Result<(), Error> {
+    /// Posts `body` signed with the stick's secret and returns the answer's body, at most
+    /// `MAX_ANSWER_BYTES` of it.
+    fn post(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
         let signature = ck_crypto::sign(&self.config.token, body);
 
         // `proxy(None)`: the Hub is reached directly, whatever the session's proxy settings say.
@@ -190,7 +213,12 @@ impl Uplink {
             .content_type("application/json")
             .send(body);
         match result {
-            Ok(_) => Ok(()),
+            Ok(mut response) => response
+                .body_mut()
+                .with_config()
+                .limit(MAX_ANSWER_BYTES)
+                .read_to_vec()
+                .map_err(|e| Error::Unreachable(e.to_string())),
             Err(ureq::Error::StatusCode(status)) => Err(Error::Rejected(status)),
             Err(other) => Err(Error::Unreachable(other.to_string())),
         }

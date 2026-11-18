@@ -10,6 +10,7 @@ use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
+mod hub_commands;
 mod self_test;
 
 /// The settings file is missing, so the image keeps its defaults. The service treats this
@@ -380,19 +381,32 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
             now(),
             recorder_state(root, uplink.recording_mode(), running),
         );
-        let result = uplink.send(&url, &heartbeat);
+        let result = uplink.send_heartbeat(&url, &heartbeat);
         // Say it once when reporting starts to fail and once when it works again, not every 15 s.
         match &result {
-            Ok(()) if failing => {
+            Ok(_) if failing => {
                 failing = false;
                 tracing::info!(seq = heartbeat.seq, "reporting to the Hub again");
             }
-            Ok(()) if heartbeat.seq == 1 => tracing::info!("the first heartbeat was accepted"),
+            Ok(_) if heartbeat.seq == 1 => tracing::info!("the first heartbeat was accepted"),
             Err(error) if !failing => {
                 failing = true;
                 tracing::warn!("the heartbeat failed, trying again every interval: {error}");
             }
-            Ok(()) | Err(_) => {}
+            Ok(_) | Err(_) => {}
+        }
+        // The Hub's commands come with its answer. They run before the events are sent, so the
+        // acknowledgements leave in the same round.
+        if let (Ok(reply), Some(queue)) = (&result, &queue)
+            && !reply.commands.is_empty()
+        {
+            let ran = uplink.process_commands(
+                queue,
+                &reply.commands,
+                now(),
+                &hub_commands::SystemExecutor,
+            );
+            tracing::info!(received = reply.commands.len(), ran, "Hub commands handled");
         }
         if let (Some(queue), Some(events_url)) = (&queue, uplink.events_url()) {
             match uplink.flush(queue, &events_url) {
