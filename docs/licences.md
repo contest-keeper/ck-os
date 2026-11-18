@@ -1,8 +1,20 @@
 # Licences and trademarks for the Keeper OS image (draft, 2026-11-18)
 
 Status: **draft for the owners to approve.** This is a summary of the published terms, read on 2026-11-18, not legal advice.
-Where it matters, ask a lawyer or the vendor. The decisions it touches are 1 (the image is built in CI and downloaded) and 6
-(VS Code, Code::Blocks and Geany only), in `sessions/DECISIONS.md` of the planning workspace.
+Where it matters, ask a lawyer or the vendor. The decisions it touches are 1 (the image is built in CI and downloaded), 6
+(VSCodium, Code::Blocks and Geany only) and 14 (licence policy), in `sessions/DECISIONS.md` of the planning workspace.
+
+## Policy (decision 14)
+
+Prefer permissive licences (MIT, Apache-2.0, BSD, ISC) wherever there is a real choice.
+
+- **Our code:** stays Apache-2.0. Its Rust dependencies are limited to permissive licences by the `[licenses]` allow list in each
+  repository's `deny.toml`, checked by `cargo deny` on every PR.
+- **The image:** the system itself cannot be all MIT. The Linux kernel, the GNU tools, Squid and XFCE are GPL or LGPL, and there is no
+  practical permissive replacement. They are accepted as separate programs, never linked into our code, with the source offer below.
+  Where a permissive choice exists we take it (VSCodium instead of Microsoft's VS Code, Apache-2.0 Kotlin).
+- **Never in the published image:** anything proprietary or not redistributable.
+- **A new component** (a package, an editor, an extension) needs a licence check and a line in the table below before it is added.
 
 Why this matters: decision 1 means **we publish** an image that contains other people's software. Publishing is redistribution,
 which most licences allow only on conditions. An admin building an image for their own use is a different case.
@@ -61,7 +73,8 @@ Options, in the order I would pick:
 3. Have each admin add it on their own computer when making sticks. This keeps us from publishing it, but it is still the admin
    giving it to others, so it needs the same legal check, and the lock leaves no way to fetch it on the stick later.
 
-**Needs your decision:** replace "VS Code" in decision 6 with "VSCodium", or drop the editor.
+**Decided (decision 6): VSCodium.** The image build installs VSCodium at a pinned version, preinstalls open extensions only (no
+Microsoft-only ones), and disables any built-in AI assistant.
 
 ## GPL software (Code::Blocks, Geany, and most of the system)
 
