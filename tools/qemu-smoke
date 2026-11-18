@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Boot a built image in QEMU and wait for the login prompt on the serial console.
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
-#   MODE: uefi | secureboot | bios | all (default all). "all" runs the three modes one after another and
-#   exits non-zero if any of them fails.
+#   MODE: uefi | secureboot | bios | all (default all). "all" runs the three boot modes one after another
+#   and exits non-zero if any of them fails.
+#   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
+#   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
+#   user network and internet access (it fetches https://example.com through Squid). Linux only.
 # Needs qemu-system-x86_64 and OVMF (package ovmf). Acceleration: KVM when /dev/kvm is writable (Linux, CI),
 # WHPX on Windows (Git Bash with a Windows QEMU), else slow software emulation. Override with QEMU_ACCEL.
 # Secure Boot mode also checks that the kernel reports "Secure boot enabled", so a boot that quietly
@@ -34,14 +37,23 @@ fi
 
 log=$(mktemp)
 vars=$(mktemp)
-trap 'rm -f "$log" "$vars"' EXIT
+# CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run.
+trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
-args=(-m 2048 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on"
-  -serial "file:$log" -no-reboot)
+args=(-m 2048 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
+serial=(-serial "file:$log")
+fifo=
+if [[ $mode == checks ]]; then
+  # A pipe lets this script type into the guest's serial console as well as read it.
+  fifo=$(mktemp -u)
+  mkfifo "$fifo.in" "$fifo.out"
+  serial=(-serial "pipe:$fifo")
+  cat "$fifo.out" >"$log" &
+fi
 
 case $mode in
-  uefi)
+  uefi | checks)
     cp "$ovmf_dir/OVMF_VARS_4M.fd" "$vars"
     args+=(-machine "q35,accel=$accel"
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.fd"
@@ -67,10 +79,70 @@ case $mode in
     ;;
 esac
 
-timeout "$timeout_s" "$qemu" "${args[@]}" &
+timeout "$timeout_s" "$qemu" "${args[@]}" "${serial[@]}" &
 pid=$!
 
+# Waits up to $2 seconds for the text $1 in the serial log; returns 1 if it never comes.
+wait_for() {
+  local _
+  for _ in $(seq 1 "$2"); do
+    grep -q "$1" "$log" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Runs the checks inside the guest. Each prints a marker line the test then looks for.
+run_checks() {
+  exec 3<>"$fifo.in"
+  local cr=$'\r' cmd
+  printf 'root%s' "$cr" >&3
+  wait_for 'root@' 60 || { echo "FAIL [checks]: no root shell on the serial console (image built without --debug-login?)" >&2; return 1; }
+  local proxy='-x http://127.0.0.1:3128 --max-time 40 -s -o /dev/null'
+  # The guest shell expands the $(...) and the curl format, not this one. CK_2_DONE is computed so the
+  # typed command line does not contain the marker it waits for.
+  # shellcheck disable=SC2016
+  local -a cmds=(
+    'echo CK1_$(systemctl is-active ck-netlock squid ck-capture ck-squid-ca | tr -s "\n" "_")'
+    'nft list table inet ck_netlock >/dev/null && echo CK2_netlock_table'
+    'echo .example.com >/etc/squid/acl_allowed_domains.txt; systemctl restart squid; sleep 3'
+    "curl $proxy -w 'CK3_%{http_code}\n' https://example.com/"
+    "curl $proxy -w 'CK4_%{http_code}\n' https://example.org/"
+    'systemctl stop ck-capture; sleep 1'
+    "curl $proxy -w 'CK5_%{http_code}\n' https://example.com/"
+    'systemctl start ck-capture; sleep 2'
+    "curl $proxy -w 'CK6_%{http_code}\n' https://example.com/"
+    'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
+    'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
+    'echo CK_$((1+1))_DONE'
+  )
+  for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
+  wait_for 'CK_2_DONE' 240 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
+  local failed=0
+  expect() { # expect MARKER DESCRIPTION
+    if grep -q "$1" "$log"; then echo "ok   $2"; else echo "FAIL $2 (wanted $1)" >&2; failed=1; fi
+  }
+  expect 'CK1_active_active_active_active_' 'ck-netlock, squid, ck-capture and ck-squid-ca are active'
+  expect 'CK2_netlock_table' 'the network lock table is loaded'
+  expect 'CK3_200' 'an allowed site works through Squid (CA trusted, capture up)'
+  if grep -q 'CK4_200' "$log"; then echo "FAIL a site that is not allowed was reachable" >&2; failed=1; else echo "ok   a site that is not allowed is refused"; fi
+  # Capture down: the decision (fail closed) is checked by the second PR; here only report what happens.
+  echo "info with ck-capture stopped the allowed site answered: $(grep -o 'CK5_[0-9]*' "$log" | tail -1)"
+  expect 'CK6_200' 'the allowed site works again once ck-capture is back'
+  return "$failed"
+}
+
 for _ in $(seq 1 "$timeout_s"); do
+  if [[ $mode == checks ]] && grep -q 'login:' "$log"; then
+    rc=0
+    run_checks || rc=1
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    if [[ $rc -eq 0 ]]; then echo "PASS [checks, $accel]"; exit 0; fi
+    echo "FAIL [checks, $accel]; last console lines:" >&2
+    tail -70 "$log" >&2
+    exit 1
+  fi
   if grep -q 'login:' "$log"; then
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true

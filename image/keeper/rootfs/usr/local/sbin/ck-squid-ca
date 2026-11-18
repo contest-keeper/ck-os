@@ -1,0 +1,33 @@
+#!/bin/sh
+# Makes this stick's own Squid CA the first time it boots, trusts it on this machine and prepares
+# Squid's certificate database. Does nothing on later boots. The CA key never leaves the stick.
+set -eu
+dir=/etc/ck/squid-ca
+trusted=/usr/local/share/ca-certificates/ck-squid-ca.crt
+
+if [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ]; then
+  umask 077
+  mkdir -p "$dir"
+  openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 \
+    -subj "/CN=Keeper OS contest CA $(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$dir/ca.key" -out "$dir/ca.crt"
+  rm -f "$trusted"
+fi
+# Squid (user proxy) reads the key; everyone may read the certificate, so the browser can trust it.
+chmod 0755 "$dir"
+chown root:proxy "$dir/ca.key"
+chmod 0640 "$dir/ca.key"
+chmod 0644 "$dir/ca.crt"
+
+# The system store, for tools on this machine. Firefox is told about the certificate by its policy file.
+if [ ! -e "$trusted" ]; then
+  cp "$dir/ca.crt" "$trusted"
+  update-ca-certificates
+fi
+
+# The folder is not made by the package; certgen runs as proxy and needs to create the database in it.
+install -d -o proxy -g proxy -m 0750 /var/lib/squid
+if [ ! -d /var/lib/squid/ssl_db ]; then
+  runuser -u proxy -- /usr/lib/squid/security_file_certgen -c -s /var/lib/squid/ssl_db -M 16MB
+fi
