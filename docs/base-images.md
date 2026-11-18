@@ -66,3 +66,17 @@ Allowed differences (not part of the root filesystem hash, so not guaranteed ide
 - Free-block contents and the ext4 journal.
 
 Not covered: a different `CK_SNAPSHOT`, a different host `mmdebstrap` or `tar` version, or a custom `CK_MIRROR`.
+
+### Boot support and test
+
+The image boots in three modes: UEFI, UEFI with Secure Boot (Canonical's signed shim and GRUB, Canonical-signed
+kernel) and legacy BIOS (GRUB in the BIOS boot partition). `tools/qemu-smoke IMAGE [uefi|secureboot|bios|all]`
+boots a copy of the image in QEMU and waits for the login prompt on the serial console; the Secure Boot mode also
+requires the kernel line "Secure boot enabled". It exits non-zero if any mode fails. Build with `--debug-login`
+(empty root password) for these tests only; never ship that image.
+
+Acceleration is KVM on Linux and CI, WHPX on Windows (Git Bash with a Windows QEMU), else slow emulation
+(`QEMU_ACCEL` overrides). Verified 2026-11-18 under WSL2 with KVM: all three modes pass. WHPX is not tested yet.
+
+The signed GRUB looks for its config in `/boot/grub` on the ESP, so `build-image` puts the stub there as well as in
+`EFI/BOOT`. Without it the signed GRUB drops to a prompt.
