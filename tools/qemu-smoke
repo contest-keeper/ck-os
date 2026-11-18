@@ -111,6 +111,7 @@ run_checks() {
     'systemctl stop ck-capture; sleep 1'
     "curl $proxy -w 'CK5_%{http_code}\n' https://example.com/"
     'systemctl start ck-capture; sleep 2'
+    "echo CK7_\$(seq 40 | xargs -P 20 -I{} curl $proxy -w '%{http_code}\n' https://example.com/ | sort | uniq -c | tr -s ' \n' '_')"
     "curl $proxy -w 'CK6_%{http_code}\n' https://example.com/"
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
@@ -126,9 +127,10 @@ run_checks() {
   expect 'CK2_netlock_table' 'the network lock table is loaded'
   expect 'CK3_200' 'an allowed site works through Squid (CA trusted, capture up)'
   if grep -q 'CK4_200' "$log"; then echo "FAIL a site that is not allowed was reachable" >&2; failed=1; else echo "ok   a site that is not allowed is refused"; fi
-  # Capture down: the decision (fail closed) is checked by the second PR; here only report what happens.
-  echo "info with ck-capture stopped the allowed site answered: $(grep -o 'CK5_[0-9]*' "$log" | tail -1)"
+  # Capture down: fail closed (decision 4), so the allowed site must not answer 200.
+  if grep -q 'CK5_200' "$log"; then echo "FAIL the allowed site passed unobserved with ck-capture stopped" >&2; failed=1; else echo "ok   the allowed site is refused while ck-capture is stopped"; fi
   expect 'CK6_200' 'the allowed site works again once ck-capture is back'
+  expect 'CK7__40_200_' '40 parallel requests (20 at a time) to the allowed site all succeed'
   return "$failed"
 }
 
