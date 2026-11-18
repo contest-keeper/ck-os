@@ -2,7 +2,8 @@
 # Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
 # No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--debug-login]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--debug-login]
+# --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
 # docs/base-images.md for what is and is not identical between two builds.
@@ -27,16 +28,24 @@ CFG_SERIAL=6B8A0003
 OUT=build
 SIZE=8G
 DEBUG_LOGIN=0
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+AGENT=$REPO/dist/ck-agent
 VERSION=$(cat "$(dirname "$0")/../version.txt" 2>/dev/null || echo 0.0.0)
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --out) OUT=$2; shift 2 ;;
     --size) SIZE=$2; shift 2 ;;
+    --agent) AGENT=$2; shift 2 ;;
     --debug-login) DEBUG_LOGIN=1; shift ;; # empty root password, for the QEMU smoke test only
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# Helpers shared with the ICPC image patch: manifest reading, the agent check, file modes.
+# shellcheck source=../image/patch/lib/image-tools.sh
+# shellcheck source-path=SCRIPTDIR
+source "$REPO/image/patch/lib/image-tools.sh"
 
 if [[ $EUID -ne 0 ]]; then echo "run as root" >&2; exit 1; fi
 
@@ -44,9 +53,11 @@ mkdir -p "$OUT"
 IMG=$OUT/keeper-os-$VERSION.img
 MNT=$(mktemp -d)
 LOOP=
+WORK=$(mktemp -d)
 
 cleanup() {
   set +e
+  rm -rf "$WORK"
   for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m" 2>/dev/null; done
   umount "$MNT" 2>/dev/null
   [[ -n $LOOP ]] && losetup -d "$LOOP"
@@ -80,11 +91,35 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time.
 mmdebstrap --skip=check/empty --variant=minbase \
-  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
+  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \
   "deb $MIRROR $SUITE-security main universe"
+
+echo "== install the Keeper files"
+# The same files the ICPC image patch uses, minus what is ICPC-only: the /icpc folder (a wallpaper script)
+# and the manifest lines about ICPC's own screen recorder.
+payload=$WORK/rootfs
+prepare_payload "$REPO/image/patch/rootfs" "$payload"
+add_agent_binary "$AGENT" "$payload"
+rm -rf "$payload/icpc"
+find "$payload" -type d -exec chmod 0755 {} +
+find "$payload" -type f -exec chmod 0644 {} +
+while IFS= read -r path; do
+  chmod "$(payload_file_mode "$path" | tail -c 5)" "$payload$path"
+done < <(list_payload_paths "$payload" f)
+cp -r --no-preserve=ownership "$payload/." "$MNT/"
+# Masked services are linked to /dev/null; removed files are deleted.
+mkdir -p "$MNT/etc/systemd/system"
+while IFS= read -r unit; do
+  [[ $unit == icpc-* ]] && continue
+  ln -sfn /dev/null "$MNT/etc/systemd/system/$unit"
+done < <(read_manifest "$REPO/image/patch/mask-units.txt")
+while IFS= read -r path; do
+  [[ $path == /icpc/* ]] && continue
+  rm -f "$MNT$path"
+done < <(read_manifest "$REPO/image/patch/remove-files.txt")
 
 echo "== configure"
 cat >"$MNT/etc/fstab" <<'EOF'
@@ -135,7 +170,7 @@ fi
 
 echo "== boot loader"
 for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
-chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service
+chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service   ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service
 # UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
 # --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
 chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --uefi-secure-boot
@@ -146,6 +181,14 @@ cp "$MNT/boot/efi/EFI/BOOT/grub.cfg" "$MNT/boot/efi/boot/grub/grub.cfg"
 # Legacy BIOS: boot code in the MBR, core image in the BIOS boot partition (partition 1).
 chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
 chroot "$MNT" update-grub
+# custom.cfg sets a superuser nobody can log in as (locks editing and recovery). That closes the normal
+# boot too unless every top-level entry is --unrestricted, so mark them, as the ICPC patch does.
+if ! grep -q 'custom\.cfg' "$MNT/boot/grub/grub.cfg" || ! grep -q '^menuentry ' "$MNT/boot/grub/grub.cfg"; then
+  echo "ERROR: grub.cfg does not read custom.cfg or has no menu entries; GRUB would stay unlocked" >&2
+  exit 1
+fi
+sed -i '/^menuentry .*--unrestricted/!s/^menuentry /menuentry --unrestricted /' "$MNT/boot/grub/grub.cfg"
+chmod 0600 "$MNT/boot/grub/grub.cfg"
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
 
