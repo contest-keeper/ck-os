@@ -159,7 +159,8 @@ fn wifi_profile_private(root: &Path) -> Option<bool> {
         .ok()?
         .permissions()
         .mode();
-    Some(mode & 0o077 == 0)
+    // No group or other permission bits: the low six bits are all zero.
+    Some(mode.trailing_zeros() >= 6)
 }
 
 #[cfg(not(unix))]
