@@ -91,6 +91,16 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
     if settings.block_bluetooth && applied.bluetooth_blocked == Some(false) {
         problems.push("a Bluetooth radio is not blocked".to_owned());
     }
+    let wanted_ssid = settings.wifi.as_ref().map(|wifi| wifi.ssid.as_str());
+    if applied.wifi_ssid.as_deref() != wanted_ssid {
+        problems.push(format!(
+            "the Wi-Fi network is {:?}, the settings say {wanted_ssid:?}",
+            applied.wifi_ssid
+        ));
+    }
+    if wanted_ssid.is_some() && applied.wifi_profile_private == Some(false) {
+        problems.push("the Wi-Fi connection file can be read by other users".to_owned());
+    }
     if !applied.config_hash_matches {
         problems.push("the stored copy of the settings does not match its hash".to_owned());
     }
@@ -291,6 +301,26 @@ mod tests {
         );
         report.applied.bluetooth_blocked = Some(true);
         assert_eq!(problems(&settings_on, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_wifi_profile_is_checked_against_the_settings() {
+        let mut wanted = config();
+        wanted.settings.wifi = Some(ck_protocol::Wifi {
+            ssid: "Venue".to_owned(),
+            password: None,
+        });
+        let mut report = good_report();
+        assert!(!problems(&wanted, &report).is_empty(), "no profile yet");
+
+        report.applied.wifi_ssid = Some("Venue".to_owned());
+        report.applied.wifi_profile_private = Some(true);
+        assert_eq!(problems(&wanted, &report), Vec::<String>::new());
+        report.applied.wifi_profile_private = Some(false);
+        assert!(!problems(&wanted, &report).is_empty(), "readable by others");
+
+        // A profile left from an earlier boot is a problem when the settings have no network.
+        assert_ne!(problems(&config(), &report), Vec::<String>::new());
     }
 
     #[test]

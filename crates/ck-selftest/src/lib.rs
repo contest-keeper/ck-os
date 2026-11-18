@@ -46,6 +46,10 @@ pub struct Applied {
     /// What the kernel says about the Bluetooth radios (`/sys/class/rfkill`): `Some(true)` when
     /// every one is soft or hard blocked, `None` when the machine has none (a VM, usually).
     pub bluetooth_blocked: Option<bool>,
+    /// The network name in the `ck-wifi` `NetworkManager` connection. The password is never read.
+    pub wifi_ssid: Option<String>,
+    /// The connection file is readable by root only (mode 0600). `None` where modes do not exist.
+    pub wifi_profile_private: Option<bool>,
 }
 
 /// What `systemctl is-active` and `is-enabled` say about one service.
