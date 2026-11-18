@@ -1,0 +1,17 @@
+#!/bin/sh
+# Shows the team wallpaper the admin chose. ck-agent writes it to /icpc/teamWallpaper.png at boot; with
+# no picture the desktop keeps its own wallpaper. At login xfdesktop has no settings yet and setting them
+# at once changes nothing, so wait (up to two minutes) until they exist.
+picture=/icpc/teamWallpaper.png
+[ -f "$picture" ] || exit 0
+i=0
+while [ "$i" -lt 120 ]; do
+  if pgrep -x xfdesktop >/dev/null && xfconf-query --channel xfce4-desktop --list | grep -q last-image; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+xfconf-query --channel xfce4-desktop --list | grep last-image | while read -r property; do
+  xfconf-query --channel xfce4-desktop --property "$property" --set "$picture"
+done

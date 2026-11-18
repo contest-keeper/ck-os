@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Keeper wallpaper
+Comment=Shows the wallpaper the admin chose
+Exec=/usr/local/bin/ck-wallpaper
+Terminal=false

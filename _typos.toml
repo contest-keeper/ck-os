@@ -1,0 +1,3 @@
+# `chage` is the Linux command that sets password aging; it is not a misspelling of "change".
+[default.extend-words]
+chage = "chage"

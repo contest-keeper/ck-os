@@ -113,6 +113,12 @@ run_checks() {
     'systemctl start ck-capture; sleep 2'
     "echo CK7_\$(seq 40 | xargs -P 20 -I{} curl $proxy -w '%{http_code}\n' https://example.com/ | sort | uniq -c | tr -s ' \n' '_')"
     "curl $proxy -w 'CK6_%{http_code}\n' https://example.com/"
+    'for i in $(seq 60); do pgrep -u contestant -x xfce4-session >/dev/null && break; sleep 2; done; echo CK8_$(pgrep -u contestant -x xfce4-session | wc -l)_session'
+    'pkcheck --action-id org.freedesktop.NetworkManager.settings.modify.system --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK9_pkcheck_$?'
+    'mv /etc/polkit-1/rules.d/50-ck-contestant.rules /root/; sleep 3; pkcheck --action-id org.freedesktop.NetworkManager.settings.modify.system --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK10_control_$?; mv /root/50-ck-contestant.rules /etc/polkit-1/rules.d/; sleep 3'
+    'id -nG contestant | tr " " "
+" | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
+    'su -s /bin/sh contestant -c "sudo -n true" >/dev/null 2>&1; echo CK12_sudo_$?'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
     'echo CK_$((1+1))_DONE'
@@ -131,6 +137,12 @@ run_checks() {
   if grep -q 'CK5_200' "$log"; then echo "FAIL the allowed site passed unobserved with ck-capture stopped" >&2; failed=1; else echo "ok   the allowed site is refused while ck-capture is stopped"; fi
   expect 'CK6_200' 'the allowed site works again once ck-capture is back'
   expect 'CK7__40_200_' '40 parallel requests (20 at a time) to the allowed site all succeed'
+  expect 'CK8_1_session' 'the contestant is logged in on the desktop by itself (autologin)'
+  # The rule is what denies: with the rule moved away the same check must not say "not authorized" (exit 1).
+  expect 'CK9_pkcheck_1' 'polkit says the contestant may not change the network (rule in place)'
+  if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else echo "FAIL control: polkit refused even without the rule" >&2; failed=1; fi
+  expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
+  expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
 }
 
