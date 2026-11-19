@@ -9,9 +9,10 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/ck-agent uplink
 Restart=on-failure
 RestartSec=10
-# It reads the root-only copy of the settings and talks to the network, nothing else.
 NoNewPrivileges=yes
-ProtectHome=yes
+ProtectHome=tmpfs
+# Hub messages go to the active desktop session over its D-Bus socket.
+BindReadOnlyPaths=/run/user
 ProtectSystem=strict
 # The queue of events waiting for the Hub, created root-only by systemd.
 StateDirectory=ck/queue

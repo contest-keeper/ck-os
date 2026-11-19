@@ -98,14 +98,23 @@ run_checks() {
   exec 3<>"$fifo.in"
   local cr=$'\r' cmd
   printf 'root%s' "$cr" >&3
-  wait_for 'root@' 60 || { echo "FAIL [checks]: no root shell on the serial console (image built without --debug-login?)" >&2; return 1; }
+  wait_for 'root@' 60 || {
+    echo "FAIL [checks]: no root shell on the serial console (image built without --debug-login?)" >&2
+    return 1
+  }
   local proxy='-x http://127.0.0.1:3128 --max-time 40 -s -o /dev/null'
-  # The guest shell expands the $(...) and the curl format, not this one. CK_2_DONE is computed so the
-  # typed command line does not contain the marker it waits for.
+  # The guest shell expands the $(...) and the curl format, not this one.
+  # Compute marker suffixes so the echoed commands cannot match the markers they are meant to print.
   # shellcheck disable=SC2016
   local -a cmds=(
     'echo CK1_$(systemctl is-active ck-netlock squid ck-capture ck-squid-ca | tr -s "\n" "_")'
     'nft list table inet ck_netlock >/dev/null && echo CK2_netlock_table'
+    'findmnt -nr -M /ck-config -o FSTYPE,VFS-OPTIONS | grep -qE "^vfat (.*,)?ro(,|$)" && echo CK39_ckconfig_$((2+3))'
+    'test "$(stat -c %u:%g:%a /ck-config)" = 0:0:700 && ! runuser -u contestant -- ls /ck-config >/dev/null 2>&1 && echo CK40_ckconfig_$((1+1))'
+    # systemctl on Noble quotes unit names containing backslashes and doubles the backslashes.
+    'mount_unit=$(systemd-escape --path --suffix=mount /ck-config); systemctl show -p After --value ck-config.service | tr " " "\n" | grep -Fxq -e "$mount_unit" -e "$(printf "\"%q\"" "$mount_unit")" && echo CK41_ckconfig_$((3+4))'
+    'runuser -u contestant -- notify-send --version >/dev/null && echo CK42_notify_$((3+5))'
+    'device=$(systemd-escape --path --suffix=device /dev/disk/by-partlabel/CKCONFIG); test "$(systemctl show -p JobRunningTimeoutUSec --value "$device")" = 30s && echo CK43_ckconfig_wait_$((3+6))'
     'echo .example.com >/etc/squid/acl_allowed_domains.txt; systemctl restart squid; sleep 3'
     "curl $proxy -w 'CK3_%{http_code}\n' https://example.com/"
     "curl $proxy -w 'CK4_%{http_code}\n' https://example.org/"
@@ -146,23 +155,43 @@ run_checks() {
     'echo CK_$((1+1))_DONE'
   )
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
-  wait_for 'CK_2_DONE' 600 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
+  wait_for 'CK_2_DONE' 600 || {
+    echo "FAIL [checks]: the guest did not finish the checks" >&2
+    return 1
+  }
   local failed=0
   expect() { # expect MARKER DESCRIPTION
-    if grep -q "$1" "$log"; then echo "ok   $2"; else echo "FAIL $2 (wanted $1)" >&2; failed=1; fi
+    if grep -q "$1" "$log"; then echo "ok   $2"; else
+      echo "FAIL $2 (wanted $1)" >&2
+      failed=1
+    fi
   }
   expect 'CK1_active_active_active_active_' 'ck-netlock, squid, ck-capture and ck-squid-ca are active'
   expect 'CK2_netlock_table' 'the network lock table is loaded'
+  expect 'CK39_ckconfig_5' 'CKCONFIG is mounted read-only at /ck-config'
+  expect 'CK40_ckconfig_2' 'only root can read the CKCONFIG partition'
+  expect 'CK41_ckconfig_7' 'ck-config is ordered after the CKCONFIG mount'
+  expect 'CK42_notify_8' 'the contestant session can launch notify-send for Hub messages'
+  expect 'CK43_ckconfig_wait_9' 'CKCONFIG has 30 seconds to become available on slow media'
   expect 'CK3_200' 'an allowed site works through Squid (CA trusted, capture up)'
-  if grep -q 'CK4_200' "$log"; then echo "FAIL a site that is not allowed was reachable" >&2; failed=1; else echo "ok   a site that is not allowed is refused"; fi
+  if grep -q 'CK4_200' "$log"; then
+    echo "FAIL a site that is not allowed was reachable" >&2
+    failed=1
+  else echo "ok   a site that is not allowed is refused"; fi
   # Capture down: fail closed (decision 4), so the allowed site must not answer 200.
-  if grep -q 'CK5_200' "$log"; then echo "FAIL the allowed site passed unobserved with ck-capture stopped" >&2; failed=1; else echo "ok   the allowed site is refused while ck-capture is stopped"; fi
+  if grep -q 'CK5_200' "$log"; then
+    echo "FAIL the allowed site passed unobserved with ck-capture stopped" >&2
+    failed=1
+  else echo "ok   the allowed site is refused while ck-capture is stopped"; fi
   expect 'CK6_200' 'the allowed site works again once ck-capture is back'
   expect 'CK7__40_200_' '40 parallel requests (20 at a time) to the allowed site all succeed'
   expect 'CK8_1_session' 'the contestant is logged in on the desktop by itself (autologin)'
   # The rule is what denies: with the rule moved away the same check must not say "not authorized" (exit 1).
   expect 'CK9_pkcheck_1' 'polkit says the contestant may not change the network (rule in place)'
-  if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else echo "FAIL control: polkit refused even without the rule" >&2; failed=1; fi
+  if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else
+    echo "FAIL control: polkit refused even without the rule" >&2
+    failed=1
+  fi
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
   expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
   expect 'CK14_ca_1_in_firefox' 'Firefox trusts this stick'"'"'s own Squid CA (policy installed it)'
@@ -170,9 +199,15 @@ run_checks() {
   expect 'CK16_exit_0' 'every contest language compiles and runs a program as the contestant'
   local language
   for language in c cpp java python3 kotlin; do
-    if grep -q "ck-toolchain ok $language " "$log"; then echo "ok   $(grep -m1 "ck-toolchain ok $language " "$log" | tr -d '\r')"; else echo "FAIL language $language" >&2; failed=1; fi
+    if grep -q "ck-toolchain ok $language " "$log"; then echo "ok   $(grep -m1 "ck-toolchain ok $language " "$log" | tr -d '\r')"; else
+      echo "FAIL language $language" >&2
+      failed=1
+    fi
   done
-  if grep -q '^missing_' "$log"; then echo "FAIL an IDE is missing: $(grep -o '^missing_[a-z]*' "$log" | tr '\n' ' ')" >&2; failed=1; else echo 'ok   VSCodium, Code::Blocks, Geany and clangd are installed'; fi
+  if grep -q '^missing_' "$log"; then
+    echo "FAIL an IDE is missing: $(grep -o '^missing_[a-z]*' "$log" | tr '\n' ' ')" >&2
+    failed=1
+  else echo 'ok   VSCodium, Code::Blocks, Geany and clangd are installed'; fi
   expect 'CK17_ms_repo_files_0' 'no Microsoft apt repository is configured'
   expect 'CK19_clangd_7' 'the clangd extension is preinstalled in VSCodium'
   expect 'CK20_ai_2' 'the VSCodium AI assistant is disabled in the default settings'
@@ -192,7 +227,10 @@ run_checks() {
   expect 'CK34_refresh_0' 'Refresh Connection restarts Squid and every allowed site answers through it'
   expect 'ck-refresh ok example.com' 'Refresh Connection reports the allowed site as reachable'
   expect 'CK35_resetlogin_0' 'polkit lets the reset login start the reset unit'
-  if grep -qE 'CK36_contestantreset_[1-3]' "$log"; then echo "ok   polkit does not let the contestant start the reset unit"; else echo "FAIL the contestant may start the reset unit" >&2; failed=1; fi
+  if grep -qE 'CK36_contestantreset_[1-3]' "$log"; then echo "ok   polkit does not let the contestant start the reset unit"; else
+    echo "FAIL the contestant may start the reset unit" >&2
+    failed=1
+  fi
   expect 'CK37_reset_0' 'the reset unit runs to the end'
   expect 'CK38_after_0_junk_launchers_5_session_1_uid_same' 'after the reset the contestant'"'"'s files are gone, the Desktop is back to the five launchers, the same uid, and the desktop session came back by itself'
   expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
@@ -206,7 +244,10 @@ for _ in $(seq 1 "$timeout_s"); do
     run_checks || rc=1
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
-    if [[ $rc -eq 0 ]]; then echo "PASS [checks, $accel]"; exit 0; fi
+    if [[ $rc -eq 0 ]]; then
+      echo "PASS [checks, $accel]"
+      exit 0
+    fi
     echo "FAIL [checks, $accel]; last console lines:" >&2
     tail -70 "$log" >&2
     exit 1
