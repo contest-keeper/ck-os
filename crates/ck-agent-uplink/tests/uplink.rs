@@ -379,6 +379,38 @@ fn sends_a_signed_heartbeat_built_from_the_machine_files() {
 }
 
 #[test]
+fn advertises_unlock_only_when_the_keeper_screen_service_is_installed() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    machine(root, "http://127.0.0.1:9");
+    let mut uplink = Uplink::load(root).expect("load");
+    let helper = root.join("usr/local/sbin/ck-screen");
+    let unit = root.join("etc/systemd/system/ck-screen@.service");
+
+    assert!(
+        !uplink
+            .next_heartbeat(time(), RecorderState::Off)
+            .screen_unlock
+    );
+
+    fs::create_dir_all(helper.parent().expect("helper parent")).expect("helper directory");
+    fs::write(helper, "").expect("helper");
+    assert!(
+        !uplink
+            .next_heartbeat(time(), RecorderState::Off)
+            .screen_unlock
+    );
+
+    fs::create_dir_all(unit.parent().expect("unit parent")).expect("unit directory");
+    fs::write(unit, "").expect("unit");
+    assert!(
+        uplink
+            .next_heartbeat(time(), RecorderState::Off)
+            .screen_unlock
+    );
+}
+
+#[test]
 fn a_refusal_and_an_unreachable_hub_are_different_errors() {
     let hub = fake_hub(vec![401, 409, 500]);
     let dir = TempDir::new().expect("temp dir");

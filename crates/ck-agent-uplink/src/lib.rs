@@ -48,6 +48,12 @@ pub enum Error {
     Queue(String),
 }
 
+/// Whether this image carries both the screen helper and the systemd service that runs it.
+pub fn screen_unlock_supported(root: &Path) -> bool {
+    root.join("usr/local/sbin/ck-screen").is_file()
+        && root.join("etc/systemd/system/ck-screen@.service").is_file()
+}
+
 /// One stick's reporting state: who it is, which boot this is, and the next sequence number.
 pub struct Uplink {
     root: PathBuf,
@@ -115,6 +121,7 @@ impl Uplink {
         }
         let settings = &self.config.settings;
         Heartbeat {
+            screen_unlock: screen_unlock_supported(&self.root),
             stick_id: self.config.stick_id.clone(),
             boot_id: self.boot_id.clone(),
             seq: self.seq,

@@ -1,0 +1,11 @@
+[Unit]
+Description=Keeper OS: %i the contestant screen
+After=lightdm.service systemd-logind.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ck-screen %i
+RuntimeDirectory=ck-screen
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=35s

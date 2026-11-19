@@ -280,6 +280,19 @@ for account in contestant ckadmin ckreset root; do
   chroot "$MNT" passwd --lock "$account" >/dev/null
   chroot "$MNT" chage --lastday "$last_change" "$account"
 done
+# A Hub lock retains the contestant's desktop at LightDM. Gate only the graphical login
+# stacks here so the passwordless reset login cannot replace that session while locked.
+for pam_service in lightdm lightdm-autologin; do
+  pam_file="$MNT/etc/pam.d/$pam_service"
+  grep -Fxq '#%PAM-1.0' "$pam_file" || {
+    echo "ERROR: $pam_service PAM stack has no header" >&2
+    exit 1
+  }
+  sed -i '/^#%PAM-1\.0/a auth requisite pam_exec.so quiet /usr/local/sbin/ck-screen pam' "$pam_file"
+done
+chroot "$MNT" install -m 0755 -o ckadmin -g ckadmin /usr/local/share/keeper/ck-unlock-screen.desktop \
+  /home/ckadmin/Desktop/ck-unlock-screen.desktop
+
 # ck-agent writes the team wallpaper here, and ck-wallpaper shows it.
 install -d -m 0755 "$MNT/icpc"
 if [[ $DEBUG_LOGIN -eq 1 ]]; then
