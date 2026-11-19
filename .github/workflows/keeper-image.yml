@@ -80,6 +80,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
       - name: Build the distribution image
         run: |
+          mkdir -p "$RUNNER_TEMP/keeper-image"
           sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
