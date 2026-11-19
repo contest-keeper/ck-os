@@ -11,5 +11,5 @@ mod root;
 pub use apply::{BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics};
 pub use branding::apply_branding;
 pub use error::Error;
-pub use load::{Loaded, load};
+pub use load::{Loaded, Source, load};
 pub use root::Root;
