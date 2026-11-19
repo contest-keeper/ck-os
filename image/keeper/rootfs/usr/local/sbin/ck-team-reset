@@ -1,0 +1,31 @@
+#!/bin/bash
+# Reset the contestant to a clean account: end the session, delete the account and its home, recreate both from
+# the template (/etc/skel, which holds the Desktop launchers and the editor settings) and start the desktop again.
+# Runs as root from ck-team-reset.service, so closing a window cannot stop it half way. The uid stays the same.
+set -euo pipefail
+
+user=contestant
+uid=$(id -u "$user")
+
+loginctl terminate-user "$user" 2>/dev/null || true
+pkill -KILL -u "$user" 2>/dev/null || true
+for _ in $(seq 1 20); do
+  pgrep -u "$user" >/dev/null || break
+  sleep 0.5
+done
+if pgrep -u "$user" >/dev/null; then
+  echo "ck-team-reset: processes of $user are still running" >&2
+  exit 1
+fi
+
+userdel --remove "$user" 2>/dev/null || true
+rm -rf "/home/$user"
+find /tmp /var/tmp -xdev -user "$uid" -delete 2>/dev/null || true
+
+useradd --uid "$uid" --create-home --shell /bin/bash "$user"
+passwd --lock "$user" >/dev/null
+chage --lastday "$(date -u +%F)" "$user"
+
+# Autologin starts a fresh session for the new account.
+systemctl restart lightdm.service
+echo "ck-team-reset: $user was reset"

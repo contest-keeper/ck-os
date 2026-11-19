@@ -1,0 +1,7 @@
+[Unit]
+Description=Reset the contestant account to the template
+# Started by ckadmin (sudo) or by the reset login (polkit rule 52-ck-reset.rules).
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ck-team-reset
