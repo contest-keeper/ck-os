@@ -35,12 +35,30 @@ VERSION=$(cat "$(dirname "$0")/../version.txt" 2>/dev/null || echo 0.0.0)
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --out) OUT=$2; shift 2 ;;
-    --size) SIZE=$2; shift 2 ;;
-    --agent) AGENT=$2; shift 2 ;;
-    --no-compress) COMPRESS=0; shift ;; # skip the .zst and its checksum (test builds)
-    --debug-login) DEBUG_LOGIN=1; shift ;; # empty root password, for the QEMU smoke test only
-    *) echo "unknown option: $1" >&2; exit 2 ;;
+    --out)
+      OUT=$2
+      shift 2
+      ;;
+    --size)
+      SIZE=$2
+      shift 2
+      ;;
+    --agent)
+      AGENT=$2
+      shift 2
+      ;;
+    --no-compress)
+      COMPRESS=0
+      shift
+      ;; # skip the .zst and its checksum (test builds)
+    --debug-login)
+      DEBUG_LOGIN=1
+      shift
+      ;; # empty root password, for the QEMU smoke test only
+    *)
+      echo "unknown option: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -75,7 +93,10 @@ CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
 EXTRA_PACKAGES=
 [[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl,libnss3-tools
 
-if [[ $EUID -ne 0 ]]; then echo "run as root" >&2; exit 1; fi
+if [[ $EUID -ne 0 ]]; then
+  echo "run as root" >&2
+  exit 1
+fi
 
 WORK=$(mktemp -d)
 mkdir -p "$OUT" "$CACHE"
@@ -86,7 +107,10 @@ fetch_pinned() {
   local file=$CACHE/${sha:0:12}-$name
   if ! echo "$sha  $file" | sha256sum -c --status 2>/dev/null; then
     curl -fsSL "$url" -o "$file"
-    echo "$sha  $file" | sha256sum -c --status || { echo "ERROR: $name does not match its pinned SHA-256" >&2; exit 1; }
+    echo "$sha  $file" | sha256sum -c --status || {
+      echo "ERROR: $name does not match its pinned SHA-256" >&2
+      exit 1
+    }
   fi
   cp "$file" "$WORK/$name"
 }
@@ -108,13 +132,13 @@ trap cleanup EXIT
 echo "== partition $IMG ($SIZE)"
 rm -f "$IMG"
 truncate -s "$SIZE" "$IMG"
-# 1 MB BIOS boot, 128 MB ESP, 16 MB config (CKCONFIG, used from step 3), rest root.
+# Keep the 128 MiB ESP directly before the 16 MiB CKCONFIG partition for Forge's thin image.
 sfdisk "$IMG" <<EOF
 label: gpt
 label-id: $DISK_GUID
 size=1MiB, type=21686148-6449-6E6F-744E-656564454649, uuid=6b8a1c10-0000-4c4b-8000-000000000000
 size=128MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=$ESP_GUID
-size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=$CFG_GUID
+size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=$CFG_GUID, name=CKCONFIG
 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$ROOT_GUID
 EOF
 LOOP=$(losetup --find --show --partscan "$IMG")
@@ -194,9 +218,9 @@ echo "== configure"
 cat >"$MNT/etc/fstab" <<'EOF'
 LABEL=CKROOT / ext4 noatime,errors=remount-ro 0 1
 LABEL=EFI /boot/efi vfat umask=0077 0 1
-LABEL=CKCONFIG /mnt/ckconfig vfat noauto,nofail,ro 0 0
+PARTLABEL=CKCONFIG /ck-config vfat noauto,nofail,ro,uid=0,gid=0,umask=0077,nosuid,nodev,noexec,x-systemd.device-timeout=5s 0 0
 EOF
-mkdir -p "$MNT/mnt/ckconfig"
+install -d -m 0700 "$MNT/ck-config"
 echo keeper-os >"$MNT/etc/hostname"
 
 # Grow the root partition to fill the disk at every boot; does nothing once it is full size.
@@ -243,7 +267,10 @@ chroot "$MNT" useradd --create-home --shell /bin/bash contestant
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups sudo ckadmin
 # The reset login : no password, listed on the login screen, its session only starts
 # the reset (ck-reset-screen and polkit rule 52-ck-reset.rules). lightdm lets members of nopasswdlogin in without one.
-grep -q nopasswdlogin "$MNT/etc/pam.d/lightdm" || { echo "ERROR: lightdm PAM has no nopasswdlogin line" >&2; exit 1; }
+grep -q nopasswdlogin "$MNT/etc/pam.d/lightdm" || {
+  echo "ERROR: lightdm PAM has no nopasswdlogin line" >&2
+  exit 1
+}
 chroot "$MNT" groupadd --force nopasswdlogin
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups nopasswdlogin ckreset
 for account in contestant ckadmin ckreset root; do
@@ -305,7 +332,7 @@ EOF
 chmod 0644 "$MNT/usr/share/doc/codium/copyright" "$MNT/usr/share/doc/firefox/copyright"
 # One network manager (NetworkManager): systemd-networkd would also configure the links, so it is masked.
 chroot "$MNT" systemctl mask systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
-chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service   ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service
+chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service
 # UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
 # --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
 chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --uefi-secure-boot
@@ -342,9 +369,9 @@ if grep -qE '^(xubuntu-core|xubuntu-desktop-minimal|xubuntu-artwork|xubuntu-wall
   echo "ERROR: a branding or Microsoft package is still installed" >&2
   exit 1
 fi
-if grep -qE '^(gnome-terminal|xfce4-terminal) ' "$OUT/keeper-os-$VERSION.packages.txt" \
-  || ! grep -q '^xterm ' "$OUT/keeper-os-$VERSION.packages.txt" \
-  || ! grep -q '^xfce4-session ' "$OUT/keeper-os-$VERSION.packages.txt" || ! grep -q '^lightdm ' "$OUT/keeper-os-$VERSION.packages.txt"; then
+if grep -qE '^(gnome-terminal|xfce4-terminal) ' "$OUT/keeper-os-$VERSION.packages.txt" ||
+  ! grep -q '^xterm ' "$OUT/keeper-os-$VERSION.packages.txt" ||
+  ! grep -q '^xfce4-session ' "$OUT/keeper-os-$VERSION.packages.txt" || ! grep -q '^lightdm ' "$OUT/keeper-os-$VERSION.packages.txt"; then
   echo "ERROR: desktop lockdown: a terminal program is installed besides xterm, or the desktop itself is gone" >&2
   exit 1
 fi
@@ -384,8 +411,8 @@ rm -f "$MNT/var/cache/ldconfig/aux-cache" "$MNT/var/log/alternatives.log" "$MNT/
 find "$MNT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 # Hash of the root filesystem content (names, modes, owners, mtimes, data), sorted. The ESP is a separate
 # filesystem and is left out by --one-file-system. The bind mounts are gone, so nothing changes while reading.
-tar -C "$MNT" --one-file-system --exclude=./etc/ssl/certs/java/cacerts --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . \
-  | sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
+tar -C "$MNT" --one-file-system --exclude=./etc/ssl/certs/java/cacerts --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . |
+  sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
 
 echo "== finish"
 cleanup
