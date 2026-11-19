@@ -1,8 +1,10 @@
 [Unit]
 Description=Keeper OS: apply the admin's settings
-# The settings are on the EFI partition, so wait for it. Squid reads its allowlist at start, the
-# recorder reads its settings at start and the desktop shows the names, so all of them must wait.
+# Try CKCONFIG before reading settings. Older images only have the EFI partition.
+Wants=ck\x2dconfig.mount
+After=ck\x2dconfig.mount
 RequiresMountsFor=/boot/efi
+# Squid, the desktop and the recorder read the applied settings at start.
 Before=squid.service display-manager.service ck-recorder.service
 
 [Service]
