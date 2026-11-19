@@ -118,8 +118,8 @@ elif tool == "debugfs":
             if parts[1] == "/etc/squid/squid.conf":
                 original = "" if os.environ.get("NO_SQUID") else SQUID
                 Path(parts[2]).write_text(state["files"].get(parts[1], original))
-            elif parts[1] in ORIGINALS:
-                Path(parts[2]).write_text(state["files"].get(parts[1], ORIGINALS[parts[1]]))
+            elif parts[1] in ORIGINALS or parts[1] in state["files"]:
+                Path(parts[2]).write_text(state["files"].get(parts[1], ORIGINALS.get(parts[1], "")))
             else:
                 Path(parts[2]).write_text(FSTAB)
         elif parts[0] == "cat":
@@ -386,6 +386,37 @@ class ImagePatchTests(unittest.TestCase):
         result = self.run_patch(SKIP_MODES="/boot/grub/grub.cfg")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("WRONG PERMISSIONS /boot/grub/grub.cfg", result.stdout)
+
+    def seed_reset_script(self, text):
+        path = "/icpc/scripts/deleteUser.sh"
+        self.state_file.write_text(json.dumps({
+            "files": {path: text},
+            "modes": {path: "0100755"},
+            "owners": {path: {"uid": "0", "gid": "0"}},
+        }))
+        return path
+
+    def test_reset_does_not_readd_the_contestant_to_lpadmin(self):
+        before = "#!/bin/bash\n# lpadmin is a CUPS administrator\n" + (
+            "useradd -d /home/contestant -m contestant -G lpadmin -s /bin/bash\n"
+            "echo 'unchanged reset logic'"
+        )
+        path = self.seed_reset_script(before)
+        for _ in range(2):
+            result = self.run_patch()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        state = json.loads(self.state_file.read_text())
+        self.assertEqual(state["files"][path], before.replace(" -G lpadmin", ""))
+        self.assertEqual(state["modes"][path], "0100755")
+        self.assertEqual(state["owners"][path], {"uid": "0", "gid": "0"})
+
+    def test_refuses_an_unrecognized_reset_group_assignment_before_writing(self):
+        self.seed_reset_script("#!/bin/bash\nusermod -a -G lpadmin contestant\n")
+        result = self.run_patch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrecognized lpadmin reference", result.stderr)
+        self.assertFalse(self.commands_file.exists())
+
 
     def test_takes_the_contestant_out_of_lpadmin_and_keeps_everything_else(self):
         for _ in range(2):

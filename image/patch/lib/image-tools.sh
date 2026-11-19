@@ -118,7 +118,7 @@ COMMANDS
 payload_file_mode() {
   local image_path=$1
   case "$image_path" in
-    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome | /icpc/scripts/set_wallpaper.sh)
+    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome | /icpc/scripts/set_wallpaper.sh | /icpc/scripts/deleteUser.sh)
       printf '0100755\n'
       ;;
     *)
@@ -326,6 +326,31 @@ remove_group_member() {
     }
     { print }
   ' "$file"
+}
+
+# The ICPC reset recreates the account. Strip its old CUPS group grant without copying that script into our payload.
+prepare_legacy_reset() {
+  local filesystem=$1 work_directory=$2 payload_directory=$3
+  local path=/icpc/scripts/deleteUser.sh
+  local original="$work_directory/reset-original" cleaned="$work_directory/reset-cleaned"
+  image_path_exists "$filesystem" "$path" || return 0
+  debugfs -R "dump $path $original" "$filesystem" 2>/dev/null
+  if [[ ! -s $original ]]; then
+    echo "ERROR: could not read the legacy reset script; nothing was applied" >&2
+    return 1
+  fi
+  sed '/^useradd -d \/home\/contestant -m contestant -G lpadmin -s \/bin\/bash$/s/ -G lpadmin//' \
+    "$original" >"$cleaned"
+  if awk '
+    !/^[[:space:]]*#/ && /(^|[^[:alnum:]_])lpadmin([^[:alnum:]_]|$)/ { found = 1 }
+    END { exit !found }
+  ' "$cleaned"; then
+    echo "ERROR: unrecognized lpadmin reference in $path; nothing was applied" >&2
+    return 1
+  fi
+  if ! cmp -s "$original" "$cleaned"; then
+    install -D -m 0755 "$cleaned" "$payload_directory$path"
+  fi
 }
 
 # lpadmin lets its members administer CUPS, which runs as root, and root may use the network (see
