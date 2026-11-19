@@ -118,7 +118,9 @@ mod tests {
 
         #[test]
         fn the_hash_goes_on_stdin_and_never_in_the_arguments() {
-            let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+            let _turn = ONE_AT_A_TIME
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let dir = tempfile::TempDir::new().expect("temp dir");
             let program = fake(dir.path(), 0);
 
@@ -137,7 +139,9 @@ mod tests {
 
         #[test]
         fn a_failing_chpasswd_is_an_error_without_the_hash() {
-            let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+            let _turn = ONE_AT_A_TIME
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let dir = tempfile::TempDir::new().expect("temp dir");
             let program = fake(dir.path(), 1);
 
