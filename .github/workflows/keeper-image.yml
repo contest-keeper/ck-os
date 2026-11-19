@@ -1,0 +1,100 @@
+name: Keeper OS image
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag created by release-please
+        required: true
+        type: string
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  image:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.tag != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Configure the existing environment approval and a separate blob-scoped OIDC publisher for
+    # each target. Enable CK_IMAGE_PUBLISH_ENABLED in that environment once it is ready.
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'develop' || 'production' }}
+    concurrency:
+      group: keeper-os-image-${{ github.event_name == 'workflow_dispatch' && 'develop' || 'production' }}
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          persist-credentials: false
+      - name: Set the image version
+        run: |
+          version=$(cat version.txt)
+          if [[ -n "$RELEASE_TAG" ]]; then
+            [[ "$RELEASE_TAG" == "v$version" ]]
+          else
+            version="$version-dev.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+            printf '%s\n' "$version" > version.txt
+          fi
+          echo "KEEPER_IMAGE_VERSION=$version" >> "$GITHUB_ENV"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ck-os-agent
+      - name: Build the static agent
+        run: |
+          cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent
+          file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Check the agent's third-party licences
+        run: |
+          notices="$RUNNER_TEMP/THIRD-PARTY-LICENSES-ck-agent.txt"
+          cargo about generate --locked --manifest-path crates/ck-agent/Cargo.toml about.hbs -o "$notices"
+          grep -q "Permission is hereby granted" "$notices"
+          grep -q "Apache License" "$notices"
+      - name: Install Linux image and VM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
+      - name: Build the distribution image
+        run: |
+          sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+            --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent"
+      - name: Boot UEFI, Secure Boot and BIOS in QEMU
+        run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
+      - name: Verify the packaged files and stage the Hub manifest
+        run: |
+          python3 tools/publish-image "$RUNNER_TEMP/keeper-image" "$KEEPER_IMAGE_VERSION" \
+            > "$RUNNER_TEMP/keeper-image/images.json"
+      - name: Sign in to the private downloads account
+        if: vars.CK_IMAGE_PUBLISH_ENABLED == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.CK_IMAGE_PUBLISH_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Publish image and Hub manifest
+        if: vars.CK_IMAGE_PUBLISH_ENABLED == 'true'
+        env:
+          DOWNLOAD_ACCOUNT: ${{ vars.CK_IMAGE_DOWNLOAD_ACCOUNT }}
+        run: |
+          : "${DOWNLOAD_ACCOUNT:?missing CK_IMAGE_DOWNLOAD_ACCOUNT for this environment}"
+          python3 tools/publish-image "$RUNNER_TEMP/keeper-image" "$KEEPER_IMAGE_VERSION" --account "$DOWNLOAD_ACCOUNT"
