@@ -37,6 +37,18 @@ WHPX is missing, which is much slower). Keep the image on `C:`.
 The result folder gets `report.json` and `serial.log`. When the test fails, it also gets
 `screenshot.png` of what the machine shows, which tells a hung boot from a wrong setting.
 
+## Check a Hub screen lock
+
+Use a configured Keeper OS VM with the test contest's `ckadmin` password set. Send **Lock** from the
+Hub and confirm the LightDM greeter takes over while the contestant's work stays in its original
+session. Send **Unlock** and confirm that session and its open applications return.
+
+Repeat **Lock** to test local recovery. Sign in to LightDM as `ckadmin`, open **Unlock Contestant
+Screen** from the desktop, and enter the same password at the sudo prompt. On an authenticated
+admin console, the equivalent command is `sudo systemctl start ck-screen@unlock.service`.
+The contestant's applications pause until the session resumes.
+
+
 ## Make a test image
 
 ```powershell

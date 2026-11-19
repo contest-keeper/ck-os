@@ -1,0 +1,9 @@
+// Keep unauthenticated users from switching into an administrator's VT or rebooting from the lock greeter.
+polkit.addRule(function (action, subject) {
+  if (subject.user !== "contestant" && subject.user !== "ckreset" && subject.user !== "lightdm") {
+    return;
+  }
+  if (/^org\.freedesktop\.login1\.(chvt|power-off|reboot|set-reboot|halt|suspend|hibernate|hybrid-sleep)(-|$)/.test(action.id)) {
+    return polkit.Result.NO;
+  }
+});

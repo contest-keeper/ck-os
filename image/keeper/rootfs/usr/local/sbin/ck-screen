@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# LightDM owns the foreground while the contestant's original session is paused.
+set -euo pipefail
+
+state=/run/ck-screen/session
+seat=seat0
+display_manager=org.freedesktop.DisplayManager
+
+[[ $EUID == 0 ]] || exit 1
+if [[ ${1:-} == pam ]]; then
+  [[ ! -e $state || ${PAM_USER:-} == ckadmin ]]
+  exit
+fi
+
+exec 9>/run/ck-screen/guard
+flock -w 5 9
+
+active_session() {
+  timeout 3s loginctl show-seat "$seat" -p ActiveSession --value
+}
+
+session_property() {
+  timeout 3s loginctl show-session "$1" -p "$2" --value
+}
+
+contestant_session() {
+  [[ -n $1 && $(session_property "$1" Name) == contestant &&
+  $(session_property "$1" Seat) == "$seat" && $(session_property "$1" Type) == x11 ]]
+}
+
+greeter_active() {
+  local session
+  session=$(active_session) && [[ -n $session && $(session_property "$session" Class) == greeter &&
+  $(session_property "$session" Name) == lightdm ]]
+}
+
+session_active() {
+  [[ $(active_session) == "$1" ]]
+}
+
+wait_until() {
+  local deadline=$((SECONDS + 8))
+  while ((SECONDS < deadline)); do
+    "$@" && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+freezer_state() {
+  timeout 3s systemctl show "$slice" -p FreezerState --value
+}
+
+switch_to_greeter() {
+  busctl --system --timeout=5s call "$display_manager" /org/freedesktop/DisplayManager/Seat0 "$display_manager.Seat" Lock &&
+    wait_until greeter_active
+}
+
+resume_session() {
+  if ! contestant_session "$session"; then
+    echo "The original contestant session is unavailable" >&2
+    return 1
+  fi
+  if timeout 5s loginctl activate "$session" &&
+    wait_until session_active "$session" &&
+    timeout 5s systemctl thaw "$slice" &&
+    [[ $(freezer_state) == running ]]; then
+    rm -- "$state"
+    return
+  fi
+  echo "Could not resume the original contestant session" >&2
+  if [[ $(freezer_state) == frozen ]]; then
+    switch_to_greeter || echo "Could not restore the LightDM greeter; retry Unlock" >&2
+  fi
+  return 1
+}
+
+slice=user-$(id -u contestant).slice
+case ${1:-} in
+  lock)
+    if [[ -e $state ]]; then
+      session=$(<"$state")
+      if contestant_session "$session" && greeter_active && [[ $(freezer_state) == frozen ]]; then
+        exit 0
+      fi
+      echo "An earlier screen lock needs to be resumed" >&2
+      exit 1
+    fi
+    session=$(active_session)
+    if ! contestant_session "$session"; then
+      echo "The contestant desktop is not active on $seat" >&2
+      exit 1
+    fi
+    printf '%s\n' "$session" >"$state"
+    if timeout 5s systemctl freeze "$slice" &&
+      [[ $(freezer_state) == frozen ]] &&
+      switch_to_greeter; then
+      exit 0
+    fi
+    echo "Could not freeze the contestant and switch the seat to LightDM" >&2
+    resume_session || echo "The screen lock could not be rolled back; retry Unlock" >&2
+    exit 1
+    ;;
+  unlock)
+    if [[ ! -e $state ]]; then
+      contestant_session "$(active_session)" && [[ $(freezer_state) == running ]]
+      exit
+    fi
+    session=$(<"$state")
+    resume_session
+    ;;
+  *)
+    echo "Usage: ck-screen lock|unlock" >&2
+    exit 2
+    ;;
+esac

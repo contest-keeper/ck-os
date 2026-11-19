@@ -1,6 +1,8 @@
 //! What a Hub command does to this machine. The checks that decide whether it may run are in
 //! `ck-agent-uplink`; by the time a command gets here it is signed, current and new.
 
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use ck_agent_uplink::Executor;
@@ -15,11 +17,31 @@ impl Executor for SystemExecutor {
     fn run(&self, action: &Action) -> Result<(), String> {
         match action {
             Action::Message { text } => notify(text),
-            Action::LockScreen => run("loginctl", &["lock-sessions"]),
+            Action::LockScreen => screen_command(false),
+            Action::UnlockScreen => screen_command(true),
             Action::Shutdown => run("systemctl", &["poweroff"]),
             _ => Err("this agent does not know that command".to_owned()),
         }
     }
+}
+
+fn screen_command(unlock: bool) -> Result<(), String> {
+    let root = Path::new("/");
+    if ck_agent_uplink::screen_unlock_supported(root) {
+        let unit = if unlock {
+            "ck-screen@unlock.service"
+        } else {
+            "ck-screen@lock.service"
+        };
+        return run("systemctl", &["--no-ask-password", "start", unit]);
+    }
+    let keeper_image = fs::read_to_string(root.join("etc/ck/image-version"))
+        .is_ok_and(|version| version.starts_with("keeper-os "));
+    if unlock || keeper_image {
+        return Err("this image has no Keeper screen service".to_owned());
+    }
+    // Keep the stock desktop lock behavior on patched ICPC images.
+    run("loginctl", &["lock-sessions"])
 }
 
 fn run(program: &str, arguments: &[&str]) -> Result<(), String> {

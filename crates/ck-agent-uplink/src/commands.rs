@@ -1,4 +1,4 @@
-//! Commands the Hub sends to the stick (message, lock the screen, shut down).
+//! Commands the Hub sends to the stick (message, lock and unlock the screen, shut down).
 //!
 //! They arrive in the reply to a heartbeat. Each one is checked before anything runs: the signature,
 //! the stick, the time window, and that its id was not run before. The design is in ck-protocol's
@@ -134,6 +134,7 @@ fn kind_of(action: &Action) -> &'static str {
     match action {
         Action::Message { .. } => "message",
         Action::LockScreen => "lock_screen",
+        Action::UnlockScreen => "unlock_screen",
         Action::Shutdown => "shutdown",
         _ => "unknown",
     }

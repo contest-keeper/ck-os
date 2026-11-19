@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Unlock Contestant Screen
+Comment=Resume the contestant desktop after a Hub lock
+Exec=/usr/bin/xterm -T "Unlock Contestant Screen" -hold -e /usr/bin/sudo /usr/bin/systemctl start ck-screen@unlock.service
+Icon=system-lock-screen
+Terminal=false
