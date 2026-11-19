@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Keeper reset screen
+Exec=/usr/local/bin/ck-reset-screen
+Terminal=false

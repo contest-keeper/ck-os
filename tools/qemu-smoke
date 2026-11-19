@@ -139,6 +139,10 @@ run_checks() {
     'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
+    'runuser -u ckreset -- sleep 40 & sleep 1; pkcheck --action-id org.freedesktop.systemd1.manage-units --detail unit ck-team-reset.service --detail verb start --process $(pgrep -u ckreset -o -x sleep) >/dev/null 2>&1; echo CK35_resetlogin_$?'
+    'pkcheck --action-id org.freedesktop.systemd1.manage-units --detail unit ck-team-reset.service --detail verb start --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK36_contestantreset_$?'
+    'uid0=$(id -u contestant); touch /home/contestant/Desktop/junk-by-contestant /home/contestant/.junk-by-contestant; systemctl start ck-team-reset.service; echo CK37_reset_$?'
+    'for i in $(seq 60); do pgrep -u contestant -x xfce4-session >/dev/null && break; sleep 2; done; echo CK38_after_$(ls /home/contestant/Desktop/junk-by-contestant /home/contestant/.junk-by-contestant 2>/dev/null | wc -l)_junk_launchers_$(ls /home/contestant/Desktop | wc -l)_session_$(pgrep -u contestant -c -x xfce4-session)_uid_$([ "$(id -u contestant)" = "$uid0" ] && echo same)'
     'echo CK_$((1+1))_DONE'
   )
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
@@ -187,6 +191,10 @@ run_checks() {
   expect 'CK33_squidrestart_1' 'the contestant still cannot restart Squid itself'
   expect 'CK34_refresh_0' 'Refresh Connection restarts Squid and every allowed site answers through it'
   expect 'ck-refresh ok example.com' 'Refresh Connection reports the allowed site as reachable'
+  expect 'CK35_resetlogin_0' 'polkit lets the reset login start the reset unit'
+  if grep -qE 'CK36_contestantreset_[1-3]' "$log"; then echo "ok   polkit does not let the contestant start the reset unit"; else echo "FAIL the contestant may start the reset unit" >&2; failed=1; fi
+  expect 'CK37_reset_0' 'the reset unit runs to the end'
+  expect 'CK38_after_0_junk_launchers_5_session_1_uid_same' 'after the reset the contestant'"'"'s files are gone, the Desktop is back to the five launchers, the same uid, and the desktop session came back by itself'
   expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"

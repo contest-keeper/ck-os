@@ -1,0 +1,7 @@
+// Keeper OS: the reset login (ckreset) may start the reset unit and nothing else in systemd.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "ckreset" && action.id === "org.freedesktop.systemd1.manage-units" &&
+      action.lookup("unit") === "ck-team-reset.service" && action.lookup("verb") === "start") {
+    return polkit.Result.YES;
+  }
+});
