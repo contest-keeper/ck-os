@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 
-use ck_protocol::StickConfig;
+use ck_protocol::{CONFIG_FILE, CONFIG_MOUNT_POINT, ESP_CONFIG_FILE, StickConfig};
 
 use crate::error::Error;
 use crate::root::Root;
@@ -9,10 +9,33 @@ use crate::root::Root;
 /// A real settings file is a few kilobytes; the partition is not trusted to say how big it is.
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
-pub(crate) const EFI_CONFIG: &str = "/boot/efi/ck/config.json";
+/// The old place of the settings, on the EFI partition. Read only when `CKCONFIG` has none, so
+/// sticks made before the config partition existed keep working (one release).
+pub(crate) const EFI_FOLDER: &str = "/boot/efi/ck";
 
-/// The settings read from the EFI partition, checked and ready to apply.
+/// Where the settings (and the wallpaper beside them) were found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The `CKCONFIG` partition, mounted at `/ck-config`.
+    CkConfig,
+    /// The EFI partition of a stick made before `CKCONFIG`.
+    Esp,
+}
+
+impl Source {
+    /// The folder that holds `config.json` and the wallpaper.
+    #[must_use]
+    pub fn folder(self) -> String {
+        match self {
+            Self::CkConfig => CONFIG_MOUNT_POINT.to_owned(),
+            Self::Esp => EFI_FOLDER.to_owned(),
+        }
+    }
+}
+
+/// The settings read from the stick, checked and ready to apply.
 pub struct Loaded {
+    pub source: Source,
     pub config: StickConfig,
     /// The file exactly as read, kept so its hash and the root-only copy match it byte for byte.
     pub raw: Vec<u8>,
@@ -22,26 +45,46 @@ pub struct Loaded {
 impl std::fmt::Debug for Loaded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Loaded")
+            .field("source", &self.source)
             .field("stick_id", &self.config.stick_id)
             .field("sha256", &self.sha256)
             .finish_non_exhaustive()
     }
 }
 
-/// Reads and validates `/boot/efi/ck/config.json`. A file that does not exist is
-/// [`Error::SettingsMissing`], which callers treat differently from a bad file.
+/// Reads and validates `/ck-config/config.json`, or, on a stick without that partition,
+/// `/boot/efi/ck/config.json`. A stick with neither is [`Error::SettingsMissing`], which callers
+/// treat differently from a bad file. A `CKCONFIG` file that exists but is bad is an error: the
+/// old copy is not used instead.
 pub fn load(root: &Root) -> Result<Loaded, Error> {
-    let file = match File::open(root.path(EFI_CONFIG)) {
+    for source in [Source::CkConfig, Source::Esp] {
+        let file_name = match source {
+            Source::CkConfig => CONFIG_FILE,
+            Source::Esp => ESP_CONFIG_FILE,
+        };
+        let path = format!("{}/{file_name}", source.folder());
+        match load_from(root, source, &path) {
+            Err(Error::SettingsMissing(_)) => {}
+            other => return other,
+        }
+    }
+    Err(Error::SettingsMissing(format!(
+        "{CONFIG_MOUNT_POINT}/{CONFIG_FILE} or {EFI_FOLDER}/{ESP_CONFIG_FILE}"
+    )))
+}
+
+fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {
+    let file = match File::open(root.path(path)) {
         Ok(file) => file,
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Err(Error::SettingsMissing(EFI_CONFIG.to_owned()));
+            return Err(Error::SettingsMissing(path.to_owned()));
         }
-        Err(e) => return Err(Error::io(format!("opening {EFI_CONFIG}"), e)),
+        Err(e) => return Err(Error::io(format!("opening {path}"), e)),
     };
     let mut raw = Vec::new();
     file.take(MAX_SETTINGS_BYTES + 1)
         .read_to_end(&mut raw)
-        .map_err(|e| Error::io(format!("reading {EFI_CONFIG}"), e))?;
+        .map_err(|e| Error::io(format!("reading {path}"), e))?;
     if raw.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(Error::SettingsTooLarge(MAX_SETTINGS_BYTES));
     }
@@ -53,6 +96,7 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
     }
     let sha256 = ck_crypto::sha256_hex(&raw);
     Ok(Loaded {
+        source,
         config,
         raw,
         sha256,

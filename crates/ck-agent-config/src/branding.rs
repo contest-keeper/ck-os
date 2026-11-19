@@ -17,7 +17,6 @@ use crate::root::Root;
 
 const HOSTNAME: &str = "/etc/hostname";
 const HOSTS: &str = "/etc/hosts";
-const EFI_FOLDER: &str = "/boot/efi/ck";
 /// The patched `set_wallpaper.sh`, which the desktop runs at login, shows this file when it exists
 /// and the image's default wallpaper otherwise.
 const TEAM_WALLPAPER: &str = "/icpc/teamWallpaper.png";
@@ -34,7 +33,7 @@ const MAX_WALLPAPER_BYTES: u64 = 16 * 1024 * 1024;
 pub fn apply_branding(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let config = &loaded.config;
     apply_computer_name(root, config)?;
-    apply_wallpaper(root, config)?;
+    apply_wallpaper(root, loaded)?;
     apply_firefox(root, config)?;
     apply_welcome(root, config)
 }
@@ -81,7 +80,8 @@ fn hosts_with_name(hosts: &str, name: &str) -> String {
     result
 }
 
-fn apply_wallpaper(root: &Root, config: &StickConfig) -> Result<(), Error> {
+fn apply_wallpaper(root: &Root, loaded: &Loaded) -> Result<(), Error> {
+    let config = &loaded.config;
     let Some(name) = &config.settings.branding.wallpaper else {
         // No wallpaper chosen: take away one from an earlier boot, so the image's own shows again.
         return remove(root, TEAM_WALLPAPER);
@@ -94,7 +94,7 @@ fn apply_wallpaper(root: &Root, config: &StickConfig) -> Result<(), Error> {
         return Ok(());
     }
     // The settings check makes `name` a plain file name, so it cannot point outside the folder.
-    let source = root.path(&format!("{EFI_FOLDER}/{name}"));
+    let source = root.path(&format!("{}/{name}", loaded.source.folder()));
     let size = match fs::metadata(&source) {
         Ok(meta) if meta.is_file() => meta.len(),
         Ok(_) => {
