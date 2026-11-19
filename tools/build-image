@@ -2,7 +2,7 @@
 # Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
 # No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--debug-login]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -28,6 +28,7 @@ CFG_SERIAL=6B8A0003
 OUT=build
 SIZE=8G
 DEBUG_LOGIN=0
+COMPRESS=1
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 AGENT=$REPO/dist/ck-agent
 VERSION=$(cat "$(dirname "$0")/../version.txt" 2>/dev/null || echo 0.0.0)
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --out) OUT=$2; shift 2 ;;
     --size) SIZE=$2; shift 2 ;;
     --agent) AGENT=$2; shift 2 ;;
+    --no-compress) COMPRESS=0; shift ;; # skip the .zst and its checksum (test builds)
     --debug-login) DEBUG_LOGIN=1; shift ;; # empty root password, for the QEMU smoke test only
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -47,17 +49,48 @@ done
 # shellcheck source-path=SCRIPTDIR
 source "$REPO/image/patch/lib/image-tools.sh"
 
-# curl only on the test image (--debug-login): the smoke test uses it to prove the allowlist. Contestants get none.
+# Programs that Ubuntu does not give us as a usable package are downloaded as exact files, pinned by URL and
+# SHA-256, so the image does not change when a publisher releases a new version. To update one, change its URL
+# and SHA-256 together.
+# - Firefox, from Mozilla's repository (Ubuntu's package is a snap, which cannot run here). The SHA-256 is in
+#   the repository's Packages index.
+# - VSCodium (the MIT build of VS Code; Microsoft's VS Code binary may not be redistributed, decisions 6 and 14),
+#   from its GitHub release (the release has a .sha256 file).
+# - The clangd extension for VSCodium (MIT), from Open VSX, so no Microsoft-only extension is needed.
+# - The Kotlin compiler, from JetBrains' release (the release has a .sha256 file).
+FIREFOX_URL='https://packages.mozilla.org/apt/pool/mozilla/firefox_160.0.1~build1_amd64_639e349c3ccea1748e38ec80e90a9eb6.deb'
+FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
+CODIUM_URL='https://github.com/VSCodium/vscodium/releases/download/1.143.17232/codium_1.143.17232_amd64.deb'
+CODIUM_SHA256=988330df203f4d2dbfb9ee0052a0356a27af7c0a2a7ff606424c531ae4a7b538
+CLANGD_VSIX_URL='https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/0.6.0/file/llvm-vs-code-extensions.vscode-clangd-0.6.0.vsix'
+CLANGD_VSIX_SHA256=32030694fa6c0ef438f4e4219f84677cd32f603c7faa4c71a283efc1f5b51751
+KOTLIN_URL='https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip'
+KOTLIN_SHA256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
+CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
+
+# curl and certutil only on the test image (--debug-login): the smoke test uses them to prove the allowlist
+# and that Firefox trusts the CA. Contestants get none.
 EXTRA_PACKAGES=
-[[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl
+[[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl,libnss3-tools
 
 if [[ $EUID -ne 0 ]]; then echo "run as root" >&2; exit 1; fi
 
-mkdir -p "$OUT"
+WORK=$(mktemp -d)
+mkdir -p "$OUT" "$CACHE"
+# fetch_pinned URL SHA256 NAME: downloads once into the cache, checks the hash every time (a changed or damaged
+# file stops the build) and copies the file to $WORK/NAME, the fixed name mmdebstrap's hooks copy in.
+fetch_pinned() {
+  local url=$1 sha=$2 name=$3
+  local file=$CACHE/${sha:0:12}-$name
+  if ! echo "$sha  $file" | sha256sum -c --status 2>/dev/null; then
+    curl -fsSL "$url" -o "$file"
+    echo "$sha  $file" | sha256sum -c --status || { echo "ERROR: $name does not match its pinned SHA-256" >&2; exit 1; }
+  fi
+  cp "$file" "$WORK/$name"
+}
 IMG=$OUT/keeper-os-$VERSION.img
 MNT=$(mktemp -d)
 LOOP=
-WORK=$(mktemp -d)
 
 cleanup() {
   set +e
@@ -91,11 +124,23 @@ E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKROOT -U "$ROOT_UUID" -E
 echo "== mount and install base system"
 mount "${LOOP}p4" "$MNT"
 mkdir -p "$MNT/boot/efi"
+fetch_pinned "$FIREFOX_URL" "$FIREFOX_SHA256" firefox.deb
+fetch_pinned "$CODIUM_URL" "$CODIUM_SHA256" codium.deb
+fetch_pinned "$CLANGD_VSIX_URL" "$CLANGD_VSIX_SHA256" clangd.vsix
+fetch_pinned "$KOTLIN_URL" "$KOTLIN_SHA256" kotlin.zip
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
-# Three suites: release, updates and security, all from the same snapshot time.
-mmdebstrap --skip=check/empty --variant=minbase \
-  --include=systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+# Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
+# answers 503 for a while, so apt retries each download.
+# shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
+mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' \
+  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
+  --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
+  --customize-hook='chroot "$1" unzip -q /tmp/kotlin.zip -d /opt' \
+  --customize-hook='for t in kotlinc kotlin kotlinc-jvm; do ln -sfn /opt/kotlinc/bin/$t "$1"/usr/local/bin/$t; done' \
+  --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
+  --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
   "$SUITE" "$MNT" \
   "deb $MIRROR $SUITE main universe" \
   "deb $MIRROR $SUITE-updates main universe" \
@@ -118,7 +163,7 @@ install_payload() {
   done < <(list_payload_paths "$payload" f)
   # Programs payload_file_mode does not know (it names the ICPC patch's own files).
   if [[ -d $payload/usr/local/sbin ]]; then chmod 0755 "$payload"/usr/local/sbin/*; fi
-  if [[ -f $payload/usr/local/bin/ck-wallpaper ]]; then chmod 0755 "$payload/usr/local/bin/ck-wallpaper"; fi
+  for f in ck-wallpaper ck-toolchains; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
   cp -r --no-preserve=ownership "$payload/." "$MNT/"
 }
 install_payload "$REPO/image/patch/rootfs" patch
@@ -238,6 +283,10 @@ fi
 echo "== make the root filesystem reproducible"
 for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m"; done
 # Files that hold build time, random or per-run data and are rebuilt by the system on first boot.
+# doc-base's index holds build times and changes on every build; doc-base rewrites it at the next package change.
+rm -f "$MNT/var/lib/doc-base/info/files.yml"
+# The Java certificate store (cacerts) has a timestamp per entry, so it differs between builds. It is kept (Java
+# needs it) and left out of the root filesystem hash below; ck-squid-ca adds this stick's CA to it at first boot.
 rm -f "$MNT/var/cache/ldconfig/aux-cache" "$MNT/var/log/alternatives.log" "$MNT/var/log/dpkg.log" \
   "$MNT/var/log/apt/history.log" "$MNT/var/log/apt/term.log" "$MNT/var/log/bootstrap.log" "$MNT/var/log/faillog" \
   "$MNT/var/log/lastlog"
@@ -245,12 +294,16 @@ rm -f "$MNT/var/cache/ldconfig/aux-cache" "$MNT/var/log/alternatives.log" "$MNT/
 find "$MNT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 # Hash of the root filesystem content (names, modes, owners, mtimes, data), sorted. The ESP is a separate
 # filesystem and is left out by --one-file-system. The bind mounts are gone, so nothing changes while reading.
-tar -C "$MNT" --one-file-system --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . \
+tar -C "$MNT" --one-file-system --exclude=./etc/ssl/certs/java/cacerts --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . \
   | sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
 
 echo "== finish"
 cleanup
 trap - EXIT
-zstd -T0 -19 -f "$IMG" -o "$IMG.zst"
-(cd "$OUT" && sha256sum "$(basename "$IMG.zst")" >"$(basename "$IMG.zst").sha256")
-echo "built $IMG.zst"
+if [[ $COMPRESS -eq 1 ]]; then
+  zstd -T0 -19 -f "$IMG" -o "$IMG.zst"
+  (cd "$OUT" && sha256sum "$(basename "$IMG.zst")" >"$(basename "$IMG.zst").sha256")
+  echo "built $IMG.zst"
+else
+  echo "built $IMG (not compressed)"
+fi

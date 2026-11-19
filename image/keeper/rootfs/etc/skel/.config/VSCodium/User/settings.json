@@ -1,0 +1,14 @@
+{
+  "telemetry.telemetryLevel": "off",
+  "update.mode": "none",
+  "update.showReleaseNotes": false,
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "extensions.ignoreRecommendations": true,
+  "workbench.enableExperiments": false,
+  "workbench.startupEditor": "none",
+  "chat.disableAIFeatures": true,
+  "chat.commandCenter.enabled": false,
+  "workbench.settings.enableNaturalLanguageSearch": false,
+  "clangd.path": "/usr/bin/clangd"
+}
