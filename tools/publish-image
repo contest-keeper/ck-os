@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Stage a Keeper OS manifest entry or publish a verified release to Azure."""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+
+INDEX = "images/images.json"
+MAX_IMAGES = 200
+MAX_INDEX_BYTES = 1024 * 1024
+
+
+def sha256(path):
+    with path.open("rb") as file:
+        return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+def prepare(directory, version):
+    image_id = f"keeper-os-{version}"
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?", version):
+        raise ValueError("expected a Keeper OS version such as 1.2.3 or 1.2.3-dev.42.1")
+    if len(image_id) > 64:
+        raise ValueError("image ID exceeds the Hub's 64-byte limit")
+    image = directory / f"{image_id}.img.zst"
+    checksum = directory / f"{image.name}.sha256"
+    packages = directory / f"{image_id}.packages.txt"
+    offer = directory / "SOURCE-OFFER.txt"
+    for file in (image, checksum, packages, offer):
+        if not file.is_file() or file.stat().st_size == 0:
+            raise ValueError(f"missing or empty release file: {file}")
+    digest = sha256(image)
+    if checksum.read_text().splitlines() != [f"{digest}  {image.name}"]:
+        raise ValueError(f"checksum does not match {image.name}")
+    entry = {
+        "id": image_id, "name": "Keeper OS", "version": version, "filename": image.name,
+        "blob": f"images/{image.name}", "size": image.stat().st_size, "sha256": digest,
+        "family": "ubuntu", "profile": "generic", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt",
+    }
+    files = [
+        (image, entry["blob"], "application/zstd", digest),
+        (checksum, f"images/{checksum.name}", "text/plain", sha256(checksum)),
+        (packages, f"images/{packages.name}", "text/plain", sha256(packages)),
+        (offer, entry["source_offer"], "text/plain", sha256(offer)),
+    ]
+    return entry, files
+
+
+def publish(account, entry, files):
+    def blob(action, name, *options):
+        return subprocess.check_output(
+            ["az", "storage", "blob", action, "--account-name", account,
+             "--container-name", "downloads", "--auth-mode", "login", "--name", name,
+             "--only-show-errors", *options],
+            text=True,
+        ).strip()
+
+    def exists(name):
+        value = blob("exists", name, "--query", "exists", "-o", "tsv").lower()
+        if value not in ("true", "false"):
+            raise ValueError(f"unexpected Azure existence response for {name}")
+        return value == "true"
+
+    with tempfile.TemporaryDirectory(prefix="keeper-image-publish-") as working:
+        index = Path(working) / "images.json"
+        document = {"images": []}
+        condition = ("--if-none-match", "*")
+        if exists(INDEX):
+            etag = blob("show", INDEX, "--query", "properties.etag", "-o", "tsv")
+            if not etag:
+                raise ValueError("the stored image index has no ETag")
+            condition = ("--if-match", etag)
+            blob("download", INDEX, "--file", str(index), "--no-progress", *condition, "-o", "none")
+            if index.stat().st_size > MAX_INDEX_BYTES:
+                raise ValueError("the stored image index exceeds the Hub's size limit")
+            document = json.loads(index.read_text(encoding="utf-8"))
+        images = document.get("images") if isinstance(document, dict) else None
+        if not isinstance(images, list) or any(
+            not isinstance(image, dict) or not isinstance(image.get("id"), str) for image in images
+        ):
+            raise ValueError("the stored image index does not contain image entries")
+        matches = [image for image in images if image["id"] == entry["id"]]
+        if matches and matches != [entry]:
+            raise ValueError(f"image ID {entry['id']} is already listed with different details")
+        if not matches:
+            images.append(entry)
+        if len(images) > MAX_IMAGES:
+            raise ValueError("the image index exceeds the Hub's image count limit")
+        data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode()
+        if len(data) > MAX_INDEX_BYTES:
+            raise ValueError("the updated image index exceeds the Hub's size limit")
+
+        for path, name, media_type, digest in files:
+            # A retry can reuse bytes from an interrupted run. An image ID cannot replace a release.
+            if exists(name):
+                if blob("show", name, "--query", "metadata.sha256", "-o", "tsv") != digest:
+                    raise ValueError(f"a different release file already exists at {name}")
+                continue
+            disposition = ()
+            if name == entry["blob"]:
+                disposition = ("--content-disposition", f'attachment; filename="{entry["filename"]}"')
+            blob("upload", name, "--file", str(path), "--content-type", media_type,
+                 "--metadata", f"sha256={digest}", "--if-none-match", "*", "--no-progress",
+                 *disposition, "-o", "none")
+        if not matches:
+            index.write_bytes(data)
+            # A concurrent writer must never overwrite a newer image index.
+            blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
+                 "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path, help="build-image output directory")
+    parser.add_argument("version", help="version used by build-image")
+    parser.add_argument("--account", help="Azure storage account; omit to print the staged manifest")
+    args = parser.parse_args()
+    try:
+        entry, files = prepare(args.directory, args.version)
+        if args.account:
+            publish(args.account, entry, files)
+        else:
+            print(json.dumps({"images": [entry]}, indent=2))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"could not publish image: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
