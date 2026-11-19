@@ -9,13 +9,7 @@
 # docs/base-images.md for what is and is not identical between two builds.
 set -euo pipefail
 
-SUITE=noble
-# Snapshot timestamp (UTC, format YYYYMMDDTHHMMSSZ). Change it on purpose to take newer security fixes.
-SNAPSHOT=${CK_SNAPSHOT:-20261117T000000Z}
-MIRROR=${CK_MIRROR:-https://snapshot.ubuntu.com/ubuntu/$SNAPSHOT}
-# Every timestamp in the image is clamped to the snapshot time unless the caller sets it.
-SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
-export SOURCE_DATE_EPOCH
+# Each profile uses a dated archive for package reproducibility.
 # Fixed IDs so two builds do not differ in UUIDs (fixed values, not secrets).
 DISK_GUID=6b8a1c10-0000-4c4b-8000-000000000001
 ESP_GUID=6b8a1c10-0000-4c4b-8000-000000000002
@@ -26,6 +20,7 @@ HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b4
 ESP_SERIAL=6B8A0002
 CFG_SERIAL=6B8A0003
 OUT=build
+PROFILE=ubuntu
 SIZE=8G
 DEBUG_LOGIN=0
 COMPRESS=1
@@ -51,6 +46,18 @@ while [[ $# -gt 0 ]]; do
       COMPRESS=0
       shift
       ;; # skip the .zst and its checksum (test builds)
+    --profile)
+      PROFILE=${2:?--profile requires ubuntu or debian}
+      case $PROFILE in
+        ubuntu | debian) ;;
+        *)
+          echo "unknown image profile: $PROFILE" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
+      ;;
+
     --debug-login)
       DEBUG_LOGIN=1
       shift
@@ -61,6 +68,32 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+SUITE=noble
+SNAPSHOT=${CK_SNAPSHOT:-20261117T000000Z}
+MIRROR=${CK_MIRROR:-https://snapshot.ubuntu.com/ubuntu/$SNAPSHOT}
+KERNEL_PACKAGES=linux-image-generic
+DESKTOP_PACKAGES=xubuntu-core
+APT_PROFILE_OPTIONS=()
+APT_SOURCES=(
+  "deb $MIRROR $SUITE main universe"
+  "deb $MIRROR $SUITE-updates main universe"
+  "deb $MIRROR $SUITE-security main universe"
+)
+SOURCE_OFFER=$REPO/image/SOURCE-OFFER.txt.in
+UBUNTU_RELEASE_FIELD=UBUNTU_CODENAME=noble
+if [[ $PROFILE == debian ]]; then
+  # shellcheck source=../image/profiles/debian/profile.sh
+  # shellcheck source-path=SCRIPTDIR
+  source "$REPO/image/profiles/debian/profile.sh"
+  configure_debian_profile
+  VERSION=$VERSION-debian
+  SOURCE_OFFER=$REPO/image/profiles/debian/SOURCE-OFFER.txt.in
+  UBUNTU_RELEASE_FIELD=
+fi
+# Every timestamp in the image is clamped to the snapshot time unless the caller sets it.
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
+export SOURCE_DATE_EPOCH
 
 # Helpers shared with the ICPC image patch: manifest reading, the agent check, file modes.
 # shellcheck source=../image/patch/lib/image-tools.sh
@@ -159,18 +192,15 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
 # answers 503 for a while, so apt retries each download.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
-mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' \
-  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' "${APT_PROFILE_OPTIONS[@]}" \
+  --include=apt,systemd-sysv,$KERNEL_PACKAGES,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,$DESKTOP_PACKAGES,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
   --customize-hook='chroot "$1" unzip -q /tmp/kotlin.zip -d /opt' \
   --customize-hook='for t in kotlinc kotlin kotlinc-jvm; do ln -sfn /opt/kotlinc/bin/$t "$1"/usr/local/bin/$t; done' \
   --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
   --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
-  "$SUITE" "$MNT" \
-  "deb $MIRROR $SUITE main universe" \
-  "deb $MIRROR $SUITE-updates main universe" \
-  "deb $MIRROR $SUITE-security main universe"
+  "$SUITE" "$MNT" "${APT_SOURCES[@]}"
 
 echo "== install the Keeper files"
 # The same files the ICPC image patch uses, minus what is ICPC-only: the /icpc folder (a wallpaper script)
@@ -197,6 +227,9 @@ install_payload() {
 install_payload "$REPO/image/patch/rootfs" patch
 # Files that exist only on Keeper OS: the Squid settings and the per-stick CA service.
 install_payload "$REPO/image/keeper/rootfs" keeper
+if [[ $PROFILE == debian ]]; then
+  cp -a "$MNT/etc/xdg/xdg-xubuntu/." "$MNT/etc/xdg/"
+fi
 printf 'keeper-os %s\n' "$VERSION" >"$MNT/etc/ck/image-version"
 # Forge reads this from the raw image before offering first-boot enrolment.
 if [[ -r $AGENT ]] && grep -aFq 'Supports Keeper OS enrolment schema 3.' "$AGENT"; then
@@ -208,8 +241,7 @@ install -m 0644 "$MNT/etc/xdg/xdg-xubuntu/xfce4/xfconf/xfce-perchannel-xml/xfce4
   "$MNT/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml"
 # The generic XFCE panel has terminal and application-finder launchers even with a restricted menu.
 python3 "$REPO/image/keeper/lock-panel.py" "$MNT/etc/xdg/xfce4/panel/default.xml"
-# 13 is the proxy user and group in the image (the host has no such name to look up).
-chown 13:13 "$MNT/etc/squid/acl_allowed_domains.txt"
+chroot "$MNT" chown proxy:proxy /etc/squid/acl_allowed_domains.txt
 # Masked services are linked to /dev/null; removed files are deleted.
 mkdir -p "$MNT/etc/systemd/system"
 while IFS= read -r unit; do
@@ -274,6 +306,9 @@ chroot "$MNT" useradd --create-home --shell /bin/bash contestant
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups sudo ckadmin
 # The reset login : no password, listed on the login screen, its session only starts
 # the reset (ck-reset-screen and polkit rule 52-ck-reset.rules). lightdm lets members of nopasswdlogin in without one.
+if [[ $PROFILE == debian ]]; then
+  configure_debian_lightdm "$MNT"
+fi
 grep -q nopasswdlogin "$MNT/etc/pam.d/lightdm" || {
   echo "ERROR: lightdm PAM has no nopasswdlogin line" >&2
   exit 1
@@ -314,7 +349,9 @@ echo "== remove Ubuntu branding, add the source offer"
 # on removed artwork; nothing installs packages on a contest stick afterwards.
 BRANDING_PACKAGES=(xubuntu-core xubuntu-desktop-minimal xubuntu-artwork xubuntu-wallpapers ubuntu-mono
   plymouth-theme-ubuntu-text plymouth-theme-xubuntu-logo plymouth-theme-xubuntu-text)
-chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
+if [[ $PROFILE == ubuntu ]]; then
+  chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
+fi
 # Desktop lockdown (threat 1): no terminal program except xterm, which Code::Blocks and Geany start to run a
 # contestant's console program. xterm has no menu entry, launcher or shortcut (see image/keeper/rootfs/etc/xdg).
 chroot "$MNT" dpkg --purge --force-depends gnome-terminal gnome-terminal-data
@@ -323,11 +360,11 @@ PRETTY_NAME="Keeper OS $VERSION"
 NAME="Keeper OS"
 VERSION_ID="$VERSION"
 VERSION="$VERSION"
-VERSION_CODENAME=noble
+VERSION_CODENAME=$SUITE
 ID=keeper-os
 ID_LIKE=debian
 HOME_URL="https://github.com/contest-keeper/ck-os"
-UBUNTU_CODENAME=noble
+$UBUNTU_RELEASE_FIELD
 EOF
 ln -sfn ../usr/lib/os-release "$MNT/etc/os-release"
 rm -f "$MNT/etc/lsb-release" "$MNT/etc/legal"
@@ -336,7 +373,7 @@ printf 'Keeper OS %s \\n \\l\n\n' "$VERSION" >"$MNT/etc/issue"
 printf 'Keeper OS %s\n' "$VERSION" >"$MNT/etc/issue.net"
 # The GPL source offer: next to the image (and in the CI upload) and inside the image.
 sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERSION@|$CODIUM_VERSION|g" \
-  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$REPO/image/SOURCE-OFFER.txt.in" >"$OUT/SOURCE-OFFER.txt"
+  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
 install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
 install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
 # The two pinned downloads ship no copyright file in the Debian places, so give them one. VSCodium's own licence
