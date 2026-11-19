@@ -278,6 +278,17 @@ sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERS
   -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$REPO/image/SOURCE-OFFER.txt.in" >"$OUT/SOURCE-OFFER.txt"
 install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
 install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
+# The two pinned downloads ship no copyright file in the Debian places, so give them one. VSCodium's own licence
+# (MIT) and its third-party notices are inside the program; Firefox is under the MPL 2.0 (its notices are in
+# about:license, and base-files has the MPL text).
+mkdir -p "$MNT/usr/share/doc/codium" "$MNT/usr/share/doc/firefox"
+cp "$MNT/usr/share/codium/resources/app/LICENSE.txt" "$MNT/usr/share/doc/codium/copyright"
+cat >"$MNT/usr/share/doc/firefox/copyright" <<'EOF'
+Firefox is made by the Mozilla Foundation and its contributors and is licensed under the Mozilla Public
+License 2.0 (text: /usr/share/common-licenses/MPL-2.0), with some parts under other licences. The notices of
+all parts are shown in Firefox at about:license. Source code: https://hg.mozilla.org/mozilla-central/
+EOF
+chmod 0644 "$MNT/usr/share/doc/codium/copyright" "$MNT/usr/share/doc/firefox/copyright"
 # One network manager (NetworkManager): systemd-networkd would also configure the links, so it is masked.
 chroot "$MNT" systemctl mask systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
 chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service   ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service
