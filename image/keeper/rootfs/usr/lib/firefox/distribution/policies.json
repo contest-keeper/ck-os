@@ -1,0 +1,43 @@
+{
+  "policies": {
+    "Proxy": {
+      "Mode": "manual",
+      "HTTPProxy": "127.0.0.1:3128",
+      "UseHTTPProxyForAllProtocols": true,
+      "Locked": true
+    },
+    "Certificates": {
+      "Install": ["/etc/ck/squid-ca/ca.crt"]
+    },
+    "Homepage": {
+      "URL": "about:blank",
+      "StartPage": "homepage",
+      "Locked": false
+    },
+    "WebsiteFilter": {
+      "Block": ["file:///*", "view-source:*", "ftp://*"]
+    },
+    "ExtensionSettings": {
+      "*": { "installation_mode": "blocked" }
+    },
+    "BlockAboutConfig": true,
+    "BlockAboutProfiles": true,
+    "BlockAboutSupport": true,
+    "DisableDeveloperTools": true,
+    "DisablePrivateBrowsing": true,
+    "DisableAppUpdate": true,
+    "DisableSystemAddonUpdate": true,
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": true,
+    "DisableProfileImport": true,
+    "PasswordManagerEnabled": false,
+    "OfferToSaveLogins": false,
+    "DontCheckDefaultBrowser": true,
+    "NoDefaultBookmarks": true,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "PromptForDownloadLocation": false
+  }
+}

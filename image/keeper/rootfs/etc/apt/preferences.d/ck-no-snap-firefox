@@ -1,0 +1,5 @@
+# Keeper OS: the Ubuntu "firefox" package only installs a snap, which does not work here. Firefox comes
+# from Mozilla's own package, pinned in tools/build-image. Never take the Ubuntu one.
+Package: firefox*
+Pin: release o=Ubuntu
+Pin-Priority: -1

@@ -37,11 +37,12 @@ fi
 
 log=$(mktemp)
 vars=$(mktemp)
-# CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run.
+# CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
+# command in the guest (checks mode), for looking into a failure.
 trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
-args=(-m 2048 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
+args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
 if [[ $mode == checks ]]; then
@@ -119,12 +120,19 @@ run_checks() {
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
     'su -s /bin/sh contestant -c "sudo -n true" >/dev/null 2>&1; echo CK12_sudo_$?'
+    'timeout 120 su - contestant -c "firefox --headless --screenshot /tmp/ff.png about:blank" >/dev/null 2>&1; echo CK13_firefox_$?'
+    'echo CK14_ca_$(certutil -L -d sql:$(dirname $(find /home/contestant -name cert9.db | head -1)) 2>/dev/null | grep -c "Keeper OS contest CA")_in_firefox'
+    'dpkg -s firefox | grep -q "^Version: 160.0.1" && ! command -v snap >/dev/null && echo CK15_mozilla_deb_no_snap'
+    'su - contestant -c "ck-toolchains --run"; echo CK16_exit_$?'
+    'for c in codium codeblocks geany clangd; do command -v $c >/dev/null || echo missing_$c; done; echo CK17_ms_repo_files_$(ls /etc/apt/sources.list.d/ | grep -ciE "vscode|microsoft"); test -f /usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd/package.json && echo CK19_clangd_$((3+4)); grep -q chat.disableAIFeatures /home/contestant/.config/VSCodium/User/settings.json && echo CK20_ai_$((1+1)); dpkg -l code 2>/dev/null | grep -c ^ii | sed s/^/CK21_msvscode_/'
+    ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
+    'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
     'ls -l /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf; nmcli -t device; ip -br addr; systemctl is-active NetworkManager systemd-resolved'
     'echo CK_$((1+1))_DONE'
   )
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
-  wait_for 'CK_2_DONE' 240 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
+  wait_for 'CK_2_DONE' 600 || { echo "FAIL [checks]: the guest did not finish the checks" >&2; return 1; }
   local failed=0
   expect() { # expect MARKER DESCRIPTION
     if grep -q "$1" "$log"; then echo "ok   $2"; else echo "FAIL $2 (wanted $1)" >&2; failed=1; fi
@@ -142,6 +150,20 @@ run_checks() {
   expect 'CK9_pkcheck_1' 'polkit says the contestant may not change the network (rule in place)'
   if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else echo "FAIL control: polkit refused even without the rule" >&2; failed=1; fi
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
+  expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
+  expect 'CK14_ca_1_in_firefox' 'Firefox trusts this stick'"'"'s own Squid CA (policy installed it)'
+  expect 'CK15_mozilla_deb_no_snap' 'Firefox is the pinned Mozilla package and there is no snap'
+  expect 'CK16_exit_0' 'every contest language compiles and runs a program as the contestant'
+  local language
+  for language in c cpp java python3 kotlin; do
+    if grep -q "ck-toolchain ok $language " "$log"; then echo "ok   $(grep -m1 "ck-toolchain ok $language " "$log" | tr -d '\r')"; else echo "FAIL language $language" >&2; failed=1; fi
+  done
+  if grep -q '^missing_' "$log"; then echo "FAIL an IDE is missing: $(grep -o '^missing_[a-z]*' "$log" | tr '\n' ' ')" >&2; failed=1; else echo 'ok   VSCodium, Code::Blocks, Geany and clangd are installed'; fi
+  expect 'CK17_ms_repo_files_0' 'no Microsoft apt repository is configured'
+  expect 'CK19_clangd_7' 'the clangd extension is preinstalled in VSCodium'
+  expect 'CK20_ai_2' 'the VSCodium AI assistant is disabled in the default settings'
+  expect 'CK21_msvscode_0' 'Microsoft VS Code (package code) is not installed'
+  expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
 }

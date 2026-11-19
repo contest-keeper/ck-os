@@ -80,3 +80,49 @@ Acceleration is KVM on Linux and CI, WHPX on Windows (Git Bash with a Windows QE
 
 The signed GRUB looks for its config in `/boot/grub` on the ESP, so `build-image` puts the stub there as well as in
 `EFI/BOOT`. Without it the signed GRUB drops to a prompt.
+
+### What the image contains and what is pinned (A3)
+
+Packages from Ubuntu (snapshot): the XFCE desktop (`xubuntu-core`), `build-essential` (gcc, g++), OpenJDK 21, Python 3,
+Code::Blocks, Geany, clangd, Squid with TLS interception, nftables. Not installed: `cups` (the build stops if it appears),
+snap, curl and certutil (those two only on the `--debug-login` test image).
+
+Four downloads are not in Ubuntu as a usable package. They are downloaded as exact files, pinned by URL and SHA-256
+in `tools/build-image` (a mismatch stops the build; the files are cached in `~/.cache/ck-os-build`):
+
+| Program | Version | Why |
+|---|---|---|
+| Firefox | 160.0.1~build1 (Mozilla's deb) | Ubuntu's package is a snap, which cannot run here |
+| VSCodium | 1.143.17232 (the project's deb from GitHub; MIT, not Microsoft's VS Code, decisions 6 and 14) | not in Ubuntu |
+| clangd extension | 0.6.0 (Open VSX, MIT; unpacked into VSCodium's `extensions` folder) | language support without a Microsoft-only extension |
+| Kotlin compiler | 2.4.21 (JetBrains' zip, in `/opt/kotlinc`) | Ubuntu's kotlin is very old |
+
+VSCodium starts with telemetry, updates, extension auto-update and the built-in AI assistant (`chat.disableAIFeatures`) off, set in
+`/etc/skel` (`image/keeper/rootfs/etc/skel/.config/VSCodium/User/settings.json`). Its embedded terminal is closed in step A4.
+
+`ck-toolchains --run` (in the image) compiles and runs a small program in each of c, cpp, java, python3 and kotlin as
+the current user and prints one line per language.
+
+### Reproducibility, updated
+
+Fixed in addition to the list above: the contestant and admin accounts' password change dates; removed: doc-base's
+index (it holds build times).
+
+**Left out of the root filesystem hash:** `/etc/ssl/certs/java/cacerts`. The Java certificate store holds a
+timestamp per entry, so it differs between builds. It is kept in the image (Java needs it) and the stick's own CA is
+added to it at first boot.
+
+Verified 2026-11-18: two builds from the same package set gave the same root filesystem hash. That run used the live
+Ubuntu archive (`CK_MIRROR=http://archive.ubuntu.com/ubuntu`) because snapshot.ubuntu.com answered 503 for every date
+for several hours; the hash is `c4c85bf6e0e1c4d47307ca1da62edff2612aa70609926bbfbd1e18f7b6bf6b4b` for that package
+set only. **Open:** repeat the comparison with the default snapshot once it answers again. Package downloads now retry
+(`Acquire::Retries 8`).
+
+### Checks in the guest
+
+`tools/qemu-smoke IMAGE checks` logs in on the serial console of a `--debug-login` image and checks: network lock,
+Squid, capture (fail closed and 40 parallel requests), the contestant's autologin session, the polkit rule (with a
+control), group membership and sudo, Firefox (starts, trusts the stick's CA, Mozilla package, no snap), the five
+languages, the three IDEs, and the Java store. It needs internet. `CK_SMOKE_LOG` keeps the serial log and
+`CK_SMOKE_EXTRA` runs one more command, for looking into a failure.
+
