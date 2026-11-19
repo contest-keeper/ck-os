@@ -1,11 +1,28 @@
 //! Compares what the machine reported with what the stick's own settings say should happen.
 
-use ck_protocol::{Settings, StickConfig};
+use ck_protocol::{Settings, StickId, render_computer_name};
 use ck_selftest::Report;
+
+pub struct ExpectedConfig {
+    pub stick_id: StickId,
+    pub settings: Settings,
+    pub machine_number: Option<u32>,
+}
+
+impl ExpectedConfig {
+    pub fn computer_name(&self) -> String {
+        render_computer_name(
+            &self.settings.branding.computer_name_pattern,
+            &self.settings.team,
+            &self.settings.site,
+            self.machine_number.unwrap_or(1),
+        )
+    }
+}
 
 /// The reasons the machine does not match its settings. Empty means it matches.
 #[must_use]
-pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
+pub fn problems(config: &ExpectedConfig, report: &Report) -> Vec<String> {
     let mut problems = Vec::new();
     let settings = &config.settings;
     let applied = &report.applied;
@@ -189,12 +206,12 @@ fn normalized_sites(sites: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use ck_protocol::{LocalDateTime, RecordingMode, Settings, StickConfig, StickId, Token};
+    use ck_protocol::RecordingMode;
     use ck_selftest::{Applied, UnitState};
 
     use super::*;
 
-    fn config() -> StickConfig {
+    fn config() -> ExpectedConfig {
         let mut settings = Settings {
             team: "Team A".to_owned(),
             site: "Lab 1".to_owned(),
@@ -203,11 +220,8 @@ mod tests {
         settings.network.allowed_domains =
             vec!["Example.org".to_owned(), ".docs.example.org".to_owned()];
         settings.recording.mode = RecordingMode::Low;
-        StickConfig {
-            schema: 1,
+        ExpectedConfig {
             stick_id: StickId::parse("03c9f556").expect("id"),
-            created_at: "2026-11-10T15:22".parse::<LocalDateTime>().expect("time"),
-            token: Token::new("secret"),
             machine_number: None,
             settings,
         }

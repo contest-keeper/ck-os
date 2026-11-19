@@ -102,8 +102,11 @@ fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {
     if raw.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(Error::SettingsTooLarge(MAX_SETTINGS_BYTES));
     }
-    let config: StickConfig =
-        serde_json::from_slice(&raw).map_err(|e| Error::SettingsUnreadable(e.to_string()))?;
+    let config = if source == Source::CkConfig {
+        crate::enrolment::resolve(root, &raw, true)?.0
+    } else {
+        serde_json::from_slice(&raw).map_err(|e| Error::SettingsUnreadable(e.to_string()))?
+    };
     let problems = config.validate();
     if !problems.is_empty() {
         return Err(Error::SettingsInvalid(problems));

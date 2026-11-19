@@ -140,6 +140,64 @@ fn time() -> Timestamp {
     "2026-11-12T10:00:00Z".parse().expect("time")
 }
 
+#[test]
+fn an_enrolment_retry_keeps_its_proof_across_a_restart() {
+    let hub = fake_hub_replies(vec![
+        (307, Vec::new()),
+        recording_reply(200, &json!({"stick_id":"03c9f556"})),
+    ]);
+    let dir = TempDir::new().expect("machine files");
+    machine(dir.path(), &hub.base);
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("etc/ck/config.json")).expect("config"))
+            .expect("settings");
+    config["schema"] = json!(3);
+    config["enrolment_code"] = json!("ABCD-EFGH-JKLM-NPQR-STUV");
+    config
+        .as_object_mut()
+        .expect("settings object")
+        .remove("token");
+    fs::create_dir_all(dir.path().join("ck-config")).expect("ckconfig folder");
+    fs::write(
+        dir.path().join("ck-config/config.json"),
+        serde_json::to_vec(&config).expect("settings JSON"),
+    )
+    .expect("enrolment settings");
+    let root = ck_agent_config::Root::new(dir.path());
+    let settings = ck_agent_config::load(&root).expect("first boot");
+    ck_agent_config::apply_basics(&root, &settings).expect("apply settings");
+
+    let first = Uplink::load(dir.path()).expect("load first boot");
+    assert!(first.enrolment_pending().expect("pending state"));
+    assert!(matches!(
+        first.claim_enrolment(),
+        Err(Error::EnrolmentRejected(307))
+    ));
+
+    let again = Uplink::load(dir.path()).expect("load after restart");
+    assert!(again.enrolment_pending().expect("pending after restart"));
+    again.claim_enrolment().expect("Hub confirms enrolment");
+    let confirmed = Uplink::load(dir.path()).expect("load confirmed state");
+    assert!(
+        !confirmed
+            .enrolment_pending()
+            .expect("confirmed after restart")
+    );
+    confirmed.claim_enrolment().expect("no further claim");
+
+    let requests = hub.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path == "/api/v1/enrol/claim")
+    );
+    assert!(
+        requests[0].body == requests[1].body,
+        "the proof changed on retry"
+    );
+}
+
 const RECORDING_ID: &str = "0123456789abcdef0123456789abcdef";
 const RECORDINGS: &str = "var/lib/ck/recordings";
 const PENDING: &str = "var/lib/ck/recordings/upload-ready/03c9f556";

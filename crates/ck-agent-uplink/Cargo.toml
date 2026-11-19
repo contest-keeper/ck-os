@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
 ck-crypto.workspace = true
 ck-protocol.workspace = true
 hex = "0.4.3"

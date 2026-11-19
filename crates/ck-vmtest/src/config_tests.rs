@@ -31,6 +31,21 @@ fn the_vm_uses_efi_only_when_the_ckconfig_file_is_missing() {
             .team,
         "current"
     );
+
+    let enrolling = config("enrolling")
+        .replace(r#""schema":2"#, r#""schema":3"#)
+        .replace(
+            r#""token":"fixture-only""#,
+            r#""enrolment_code":"ABCD-EFGH-JKLM-NPQR-STUV""#,
+        );
+    write_config_file(path, CONFIG_FILE, enrolling.as_bytes()).expect("write enrolment settings");
+    assert_eq!(
+        read_config(path)
+            .expect("read enrolment settings")
+            .settings
+            .team,
+        "enrolling"
+    );
 }
 
 fn config(team: &str) -> String {
