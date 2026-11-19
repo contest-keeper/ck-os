@@ -50,6 +50,10 @@ queue_payload_files "$payload_directory" "$commands_file"
 queue_disabled_services "$patch_directory/mask-units.txt" "$commands_file"
 queue_removed_files "$patch_directory/remove-files.txt" "$commands_file"
 queue_enabled_service ck-recorder.service graphical.target "$commands_file"
+if ! image_path_exists "$filesystem" /etc/systemd/system/timers.target.wants; then
+  printf 'mkdir /etc/systemd/system/timers.target.wants\n' >>"$commands_file"
+fi
+queue_enabled_service ck-recording-upload.timer timers.target "$commands_file"
 queue_enabled_service ck-config.service multi-user.target "$commands_file"
 queue_enabled_service ck-netlock.service sysinit.target "$commands_file"
 queue_direct_dns "$commands_file"
@@ -71,6 +75,7 @@ verify_payload "$payload_directory" "$filesystem" || verification_failed=1
 verify_disabled_services "$patch_directory/mask-units.txt" "$filesystem" || verification_failed=1
 verify_removed_files "$patch_directory/remove-files.txt" "$filesystem" || verification_failed=1
 verify_enabled_service ck-recorder.service graphical.target "$filesystem" || verification_failed=1
+verify_enabled_service ck-recording-upload.timer timers.target "$filesystem" || verification_failed=1
 verify_enabled_service ck-config.service multi-user.target "$filesystem" || verification_failed=1
 verify_enabled_service ck-netlock.service sysinit.target "$filesystem" || verification_failed=1
 verify_direct_dns "$filesystem" || verification_failed=1

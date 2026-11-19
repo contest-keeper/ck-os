@@ -215,6 +215,7 @@ class ImagePatchTests(unittest.TestCase):
         self.assertEqual(self.run_patch().returncode, 0)
         commands = self.commands_file.read_text()
         for service, target in (("ck-recorder.service", "graphical.target"),
+                                ("ck-recording-upload.timer", "timers.target"),
                                 ("ck-config.service", "multi-user.target"),
                                 ("ck-netlock.service", "sysinit.target"),
                                 ("ck-selftest.service", "multi-user.target"),

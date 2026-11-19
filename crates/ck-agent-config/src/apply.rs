@@ -3,7 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use ck_protocol::{Settings, Wifi};
+use ck_protocol::{Settings, StickConfig, UploadMode, Wifi};
 
 use crate::error::Error;
 use crate::load::Loaded;
@@ -53,7 +53,7 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     write(
         root,
         RECORDING_CONF,
-        recording_conf(settings).as_bytes(),
+        recording_conf(&loaded.config).as_bytes(),
         0o644,
     )?;
 
@@ -146,8 +146,8 @@ fn remove(root: &Root, absolute: &str) -> Result<(), Error> {
 }
 
 /// Shell variables that `ck-recorder` reads with `.`.
-fn recording_conf(settings: &Settings) -> String {
-    let recording = &settings.recording;
+fn recording_conf(config: &StickConfig) -> String {
+    let recording = &config.settings.recording;
     let mut conf = format!(
         "{GENERATED}MODE={}\nSTART_DELAY={}\n",
         recording.mode.as_str(),
@@ -158,6 +158,12 @@ fn recording_conf(settings: &Settings) -> String {
     }
     if let Some(interval) = recording.snapshot_interval_s {
         let _ = writeln!(conf, "SNAPSHOT_INTERVAL={interval}");
+    }
+    if matches!(
+        recording.upload,
+        UploadMode::AfterContest | UploadMode::DuringContest
+    ) {
+        let _ = writeln!(conf, "UPLOAD_STICK={}", config.stick_id);
     }
     conf
 }

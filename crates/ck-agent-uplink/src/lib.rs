@@ -6,9 +6,11 @@
 
 mod commands;
 mod queue;
+mod recordings;
 
 pub use commands::Executor;
 pub use queue::{MAX_PAYLOAD_BYTES, MAX_PENDING, Queue};
+pub use recordings::RecordingError;
 
 use std::fs;
 use std::path::{Path, PathBuf};

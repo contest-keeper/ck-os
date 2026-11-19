@@ -13,7 +13,7 @@
 # appears (and until START_AT, if set) so it does not slow down the boot and login.
 # It stops writing when free space drops below MIN_FREE_MB, so it can never fill the disk.
 #
-# Collect after the contest:  sudo ls -lh /var/lib/ck/recordings
+# Collect after the contest:  sudo ls -lRh /var/lib/ck/recordings
 
 CONF=/etc/ck/recording.conf
 MODE=low
@@ -21,6 +21,7 @@ START_DELAY=60
 START_AT=""
 SNAPSHOT_INTERVAL=10
 OUT=/var/lib/ck/recordings
+UPLOAD_STICK=""
 SEGMENT=600 # seconds per file
 MIN_FREE_MB=1500
 DISPLAY_NAME=:0
@@ -67,8 +68,16 @@ set_state() {
 }
 
 set_state waiting
+umask 077
 mkdir -p "$OUT"
 chmod 700 "$OUT"
+video_out=$OUT
+snapshot_out=$OUT/snapshots
+if [[ $UPLOAD_STICK =~ ^[a-zA-Z0-9-]{1,64}$ ]]; then
+  video_out=$OUT/upload-ready/$UPLOAD_STICK
+  snapshot_out=$video_out
+fi
+mkdir -p "$video_out" "$snapshot_out"
 export DISPLAY=$DISPLAY_NAME
 
 find_xauth() {
@@ -119,19 +128,25 @@ while true; do
   fi
 
   set_state recording
+  stamp=$(date +%Y%m%d-%H%M%S-%N)
   # A resolution change (e.g. a projector plugged in) ends the file; the loop starts a new one.
   if [ "$MODE" = snapshots ]; then
-    mkdir -p "$OUT/snapshots"
     ffmpeg -hide_banner -loglevel error -nostdin \
       -f x11grab -framerate "1/$SNAPSHOT_INTERVAL" -video_size "$size" -draw_mouse 1 -i "$DISPLAY_NAME" \
       -t "$SEGMENT" -vf "$SCALE_F" -q:v "$QUALITY" \
-      -f image2 -strftime 1 "$OUT/snapshots/%Y%m%d-%H%M%S.jpg" || sleep 5
+      -f image2 -atomic_writing 1 "$snapshot_out/snapshot-$stamp-%08d.jpg" || sleep 5
   else
-    f="$OUT/screen-$(date +%Y%m%d-%H%M%S).mkv"
-    ffmpeg -hide_banner -loglevel error -nostdin \
+    # The uploader only sees the final name once ffmpeg closes and finishes the segment.
+    partial="$OUT/.capturing.mkv"
+    if ffmpeg -hide_banner -loglevel error -nostdin \
       -f x11grab -framerate "$FPS" -video_size "$size" -draw_mouse 1 -i "$DISPLAY_NAME" \
       -t "$SEGMENT" -vf "$SCALE_F" \
       -c:v libx264 -preset "$PRESET" -tune stillimage -crf "$CRF" -threads 1 -pix_fmt yuv420p \
-      -g $((FPS * 10)) "$f" || sleep 5
+      -g $((FPS * 10)) -f matroska -y "$partial"; then
+      mv -T -- "$partial" "$video_out/screen-$stamp.mkv" || sleep 5
+    else
+      rm -f -- "$partial"
+      sleep 5
+    fi
   fi
 done

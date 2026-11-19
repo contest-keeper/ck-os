@@ -1,11 +1,12 @@
-use std::fs;
+use std::fs::{self, File, FileTimes};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, SystemTime};
 
-use ck_agent_uplink::{Error, Queue, Uplink, recorder_state};
+use ck_agent_uplink::{Error, Queue, RecordingError, Uplink, recorder_state};
 use ck_protocol::{
     EventKind, FIRST_PREV_HASH, Heartbeat, RecorderState, RecordingMode, Timestamp, Token,
     verify_chain,
@@ -16,6 +17,7 @@ use tempfile::TempDir;
 const TOKEN: &str = "the-stick-secret";
 
 struct Captured {
+    method: String,
     path: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -37,12 +39,21 @@ struct FakeHub {
 }
 
 fn fake_hub(statuses: Vec<u16>) -> FakeHub {
+    fake_hub_replies(
+        statuses
+            .into_iter()
+            .map(|status| (status, Vec::new()))
+            .collect(),
+    )
+}
+
+fn fake_hub_replies(replies: Vec<(u16, Vec<u8>)>) -> FakeHub {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("address"));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&requests);
     thread::spawn(move || {
-        for status in statuses {
+        for (status, body) in replies {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
@@ -58,11 +69,9 @@ fn fake_hub(statuses: Vec<u16>) -> FakeHub {
             };
             let head = String::from_utf8_lossy(&data[..header_end]).into_owned();
             let mut lines = head.lines();
-            let path = lines
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .unwrap_or("")
-                .to_owned();
+            let mut request = lines.next().expect("request line").split_whitespace();
+            let method = request.next().expect("method").to_owned();
+            let path = request.next().expect("path").to_owned();
             let headers: Vec<(String, String)> = lines
                 .filter_map(|line| line.split_once(':'))
                 .map(|(n, v)| (n.trim().to_owned(), v.trim().to_owned()))
@@ -77,13 +86,22 @@ fn fake_hub(statuses: Vec<u16>) -> FakeHub {
                 data.extend_from_slice(&buffer[..read]);
             }
             seen.lock().expect("lock").push(Captured {
+                method,
                 path,
                 headers,
                 body: data[header_end..header_end + length].to_vec(),
             });
-            let reply =
-                format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let location = if status == 307 {
+                "Location: /unexpected-upload-recipient\r\n"
+            } else {
+                ""
+            };
+            let reply = format!(
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n{location}\r\n",
+                body.len()
+            );
             stream.write_all(reply.as_bytes()).expect("reply");
+            stream.write_all(&body).expect("body");
         }
     });
     FakeHub { base, requests }
@@ -120,6 +138,184 @@ fn machine(root: &Path, url: &str) {
 
 fn time() -> Timestamp {
     "2026-11-12T10:00:00Z".parse().expect("time")
+}
+
+const RECORDING_ID: &str = "0123456789abcdef0123456789abcdef";
+const RECORDINGS: &str = "var/lib/ck/recordings";
+const PENDING: &str = "var/lib/ck/recordings/upload-ready/03c9f556";
+
+fn recording_reply(status: u16, value: &serde_json::Value) -> (u16, Vec<u8>) {
+    (status, serde_json::to_vec(value).expect("reply"))
+}
+
+fn recording_status(next_chunk: u32) -> (u16, Vec<u8>) {
+    recording_reply(
+        200,
+        &json!({
+            "id": RECORDING_ID, "chunk_size": 4, "next_chunk": next_chunk, "complete": false
+        }),
+    )
+}
+
+fn recording_settings(root: &Path, mode: &str, end: Option<&str>, retention: Option<u32>) {
+    let config = root.join("etc/ck/config.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config).expect("read config")).expect("config");
+    value["recording"]["upload"] = json!(mode);
+    value["recording"]["retention_days"] = json!(retention);
+    value["contest"]["end"] = json!(end);
+    fs::write(config, value.to_string()).expect("config");
+}
+
+#[test]
+fn recordings_resume_with_signed_requests_after_the_hub_fails() {
+    let hub = fake_hub_replies(vec![
+        recording_status(0),
+        recording_reply(200, &json!({"next_chunk": 1})),
+        recording_reply(503, &json!({})),
+        recording_status(1),
+        recording_status(1),
+        recording_reply(200, &json!({"next_chunk": 2})),
+        recording_reply(200, &json!({"complete": true})),
+    ]);
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    machine(root, &hub.base);
+    recording_settings(root, "during_contest", None, None);
+    let pending = root.join(PENDING);
+    fs::create_dir_all(&pending).expect("pending");
+    let video = pending.join("screen-1.mkv");
+    fs::write(&video, b"abcdefg").expect("video");
+    fs::write(pending.join("screen-2.mkv.tmp"), b"still recording").expect("partial");
+    assert!(
+        Uplink::load(root)
+            .expect("load")
+            .upload_recordings()
+            .is_err()
+    );
+    assert!(video.exists());
+    assert_eq!(
+        Uplink::load(root)
+            .expect("reload")
+            .upload_recordings()
+            .expect("resume"),
+        1
+    );
+    assert!(!video.exists());
+    assert!(pending.join("screen-2.mkv.tmp").exists());
+    let kept = root.join(RECORDINGS).join("uploaded/03c9f556/screen-1.mkv");
+    assert_eq!(fs::read(kept).expect("local recording"), b"abcdefg");
+
+    let requests = hub.requests.lock().expect("lock");
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "PUT", "PUT", "POST", "GET", "PUT", "POST"]
+    );
+    let first: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("start body");
+    assert_eq!(
+        first,
+        json!({
+            "file": "screen-1.mkv", "kind": "video", "size": 7, "sha256": ck_crypto::sha256_hex(b"abcdefg")
+        })
+    );
+    assert_eq!(
+        requests[4].path,
+        format!("/api/v1/recordings/{RECORDING_ID}")
+    );
+    assert_eq!(requests[5].body, b"efg");
+
+    let chunk0 = ck_crypto::sha256_hex(b"abcd");
+    let chunk1 = ck_crypto::sha256_hex(b"efg");
+    let signed = [
+        String::from_utf8(requests[0].body.clone()).expect("start body"),
+        format!("ck-recording-chunk\n{RECORDING_ID}\n0\n{chunk0}"),
+        format!("ck-recording-chunk\n{RECORDING_ID}\n1\n{chunk1}"),
+        String::from_utf8(requests[3].body.clone()).expect("repeated start body"),
+        format!("ck-recording-status\n{RECORDING_ID}"),
+        format!("ck-recording-chunk\n{RECORDING_ID}\n1\n{chunk1}"),
+        format!("ck-recording-complete\n{RECORDING_ID}"),
+    ];
+    for (request, message) in requests.iter().zip(signed) {
+        assert_eq!(request.header("x-ck-stick"), Some("03c9f556"));
+        assert_eq!(
+            request.header("x-ck-signature"),
+            Some(ck_crypto::sign(&Token::new(TOKEN), message.as_bytes()).as_str())
+        );
+    }
+    assert_eq!(
+        requests[5].header("x-ck-chunk-sha256"),
+        Some(chunk1.as_str())
+    );
+}
+
+#[test]
+fn recordings_respect_opt_in_and_clean_only_expired_closed_files() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    machine(root, "http://127.0.0.1:1");
+    let pending = root.join(PENDING);
+    fs::create_dir_all(&pending).expect("pending");
+    let old_file = pending.join("old.jpg");
+    let active = pending.join("capture.jpg.tmp");
+    let recent = pending.join("recent.mkv");
+    let local_only = root.join(RECORDINGS).join("without-upload.mkv");
+    let old_time = SystemTime::now() - Duration::from_secs(3 * 86_400);
+    for path in [&old_file, &active, &local_only] {
+        let file = File::create(path).expect("file");
+        file.set_times(FileTimes::new().set_modified(old_time))
+            .expect("mtime");
+    }
+    fs::write(&recent, b"recent").expect("recent");
+    assert_eq!(
+        Uplink::load(root)
+            .expect("load")
+            .upload_recordings()
+            .expect("default keep"),
+        0
+    );
+    assert!(old_file.exists() && local_only.exists());
+    recording_settings(root, "after_contest", Some("2099-12-31T12:00"), Some(2));
+    assert_eq!(
+        Uplink::load(root)
+            .expect("load")
+            .upload_recordings()
+            .expect("before end"),
+        0
+    );
+    assert!(!old_file.exists() && !local_only.exists());
+    assert!(active.exists() && recent.exists());
+    recording_settings(root, "after_contest", None, None);
+    assert_eq!(
+        Uplink::load(root)
+            .expect("load")
+            .upload_recordings()
+            .expect("end required"),
+        0
+    );
+}
+
+#[test]
+fn recordings_can_start_after_the_contest_and_never_follow_a_redirect() {
+    let hub = fake_hub_replies(vec![recording_reply(307, &json!({}))]);
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    machine(root, &hub.base);
+    recording_settings(root, "after_contest", Some("2001-01-01T00:00"), None);
+    let pending = root.join(PENDING);
+    fs::create_dir_all(&pending).expect("pending");
+    let clip = pending.join("snapshot-1.jpg");
+    fs::write(&clip, b"abc").expect("clip");
+    let result = Uplink::load(root).expect("load").upload_recordings();
+    assert!(matches!(result, Err(RecordingError::Rejected(307))));
+    assert!(clip.exists());
+    let requests = hub.requests.lock().expect("lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/v1/recordings");
+    let start: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("start");
+    assert_eq!(start["kind"], "snapshot");
 }
 
 #[test]

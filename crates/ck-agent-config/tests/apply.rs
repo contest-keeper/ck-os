@@ -48,6 +48,7 @@ fn applies_the_settings_to_the_system_files() {
     ] {
         assert!(recording.lines().any(|l| l == line), "missing {line}");
     }
+    assert!(!recording.contains("UPLOAD_STICK="));
 
     let list = read(&dir, "etc/squid/acl_allowed_domains.txt");
     let sites: Vec<&str> = list.lines().filter(|line| !line.starts_with('#')).collect();
@@ -62,6 +63,19 @@ fn applies_the_settings_to_the_system_files() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+}
+
+#[test]
+fn recording_handoff_is_scoped_to_the_stick_only_when_opted_in() {
+    let opted_in = SETTINGS.replace(
+        "\"recording\": {",
+        "\"recording\": {\"upload\":\"after_contest\",",
+    );
+    let (directory, root) = stick(&opted_in);
+    let loaded = load(&root).expect("valid settings");
+    apply_basics(&root, &loaded).expect("apply");
+    let conf = read(&directory, "etc/ck/recording.conf");
+    assert!(conf.lines().any(|line| line == "UPLOAD_STICK=03c9f556"));
 }
 
 #[test]

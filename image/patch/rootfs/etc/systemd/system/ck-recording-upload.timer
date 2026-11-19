@@ -1,0 +1,10 @@
+[Unit]
+Description=Keeper OS: check for recordings ready to upload
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=45s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
