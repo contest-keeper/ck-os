@@ -42,3 +42,14 @@ jobs:
       - run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p ck-agent
       - name: Check the agent is static
         run: file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Write the third-party licences of the agent
+        # Fails on a licence that is not allowed (about.toml) or on an empty result.
+        run: |
+          mkdir -p out
+          cargo about generate --locked --manifest-path crates/ck-agent/Cargo.toml about.hbs \
+            -o out/THIRD-PARTY-LICENSES-ck-agent.txt
+          grep -q "Permission is hereby granted" out/THIRD-PARTY-LICENSES-ck-agent.txt
+          grep -q "Apache License" out/THIRD-PARTY-LICENSES-ck-agent.txt
