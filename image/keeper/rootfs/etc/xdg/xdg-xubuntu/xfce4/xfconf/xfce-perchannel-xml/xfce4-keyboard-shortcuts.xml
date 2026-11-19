@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Keeper OS: the contestant has no shortcut that starts a program (terminal, run dialog, file manager, lock,
+     logout, task manager). Only window handling is kept. -->
+<channel name="xfce4-keyboard-shortcuts" version="1.0">
+  <property name="commands" type="empty">
+    <property name="default" type="empty"/>
+  </property>
+  <property name="xfwm4" type="empty">
+    <property name="default" type="empty">
+      <property name="Escape" type="string" value="cancel_key"/>
+      <property name="Left" type="string" value="left_key"/>
+      <property name="Right" type="string" value="right_key"/>
+      <property name="Up" type="string" value="up_key"/>
+      <property name="Down" type="string" value="down_key"/>
+      <property name="&lt;Alt&gt;Tab" type="string" value="cycle_windows_key"/>
+      <property name="&lt;Alt&gt;&lt;Shift&gt;Tab" type="string" value="cycle_reverse_windows_key"/>
+      <property name="&lt;Alt&gt;F4" type="string" value="close_window_key"/>
+      <property name="&lt;Alt&gt;F7" type="string" value="maximize_window_key"/>
+      <property name="&lt;Alt&gt;F9" type="string" value="hide_window_key"/>
+      <property name="&lt;Alt&gt;F11" type="string" value="fullscreen_key"/>
+      <property name="&lt;Alt&gt;space" type="string" value="popup_menu_key"/>
+      <property name="&lt;Super&gt;d" type="string" value="show_desktop_key"/>
+      <property name="&lt;Super&gt;Tab" type="string" value="switch_window_key"/>
+    </property>
+  </property>
+</channel>

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Firefox
+Exec=firefox %u
+Icon=firefox
+Terminal=false
