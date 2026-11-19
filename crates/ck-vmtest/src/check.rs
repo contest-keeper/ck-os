@@ -111,13 +111,14 @@ pub fn problems(config: &StickConfig, report: &Report) -> Vec<String> {
 
 fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Report) {
     let recording_on = settings.recording.mode.as_str() != "off";
-    unit(problems, report, "ck-config", Some("active"), "enabled");
+    let enabled = &["enabled"];
+    unit(problems, report, "ck-config", Some("active"), enabled);
     unit(
         problems,
         report,
         "ck-recorder",
         recording_on.then_some("active"),
-        "enabled",
+        enabled,
     );
     // With no server address the service has nothing to do and ends at once, so it is only
     // expected to be running when the admin named a Hub.
@@ -127,12 +128,19 @@ fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Repo
         report,
         "ck-uplink",
         reports.then_some("active"),
-        "enabled",
+        enabled,
     );
-    unit(problems, report, "icpc-screen-record", None, "masked");
-    unit(problems, report, "ck-netlock", Some("active"), "enabled");
-    unit(problems, report, "squid", Some("active"), "enabled");
-    unit(problems, report, "ck-capture", Some("active"), "enabled");
+    // ICPC-based images mask their old recorder, and generic images omit it.
+    unit(
+        problems,
+        report,
+        "icpc-screen-record",
+        Some("inactive"),
+        &["masked", "not-found"],
+    );
+    unit(problems, report, "ck-netlock", Some("active"), enabled);
+    unit(problems, report, "squid", Some("active"), enabled);
+    unit(problems, report, "ck-capture", Some("active"), enabled);
 }
 
 fn same(problems: &mut Vec<String>, what: &str, expected: Option<&str>, actual: Option<&str>) {
@@ -141,14 +149,13 @@ fn same(problems: &mut Vec<String>, what: &str, expected: Option<&str>, actual: 
     }
 }
 
-/// `active` is checked only when the test knows what it must be: a service that may or may not be
-/// running (the old recorder, which is masked) is judged by `enabled` alone.
+/// Check the installation state and, when specified, the runtime state of a service.
 fn unit(
     problems: &mut Vec<String>,
     report: &Report,
     name: &str,
     active: Option<&str>,
-    enabled: &str,
+    enabled: &[&str],
 ) {
     let Some(state) = report.units.iter().find(|u| u.name == name) else {
         problems.push(format!("the report has nothing about {name}"));
@@ -159,8 +166,12 @@ fn unit(
     {
         problems.push(format!("{name} is {}, expected {active}", state.active));
     }
-    if state.enabled != enabled {
-        problems.push(format!("{name} is {}, expected {enabled}", state.enabled));
+    if !enabled.contains(&state.enabled.as_str()) {
+        problems.push(format!(
+            "{name} is {}, expected {}",
+            state.enabled,
+            enabled.join(" or ")
+        ));
     }
 }
 
@@ -270,6 +281,33 @@ mod tests {
         assert_eq!(
             problems(&config(), &report),
             ["the report has nothing about ck-config"]
+        );
+    }
+
+    #[test]
+    fn a_generic_image_can_report_that_the_icpc_recorder_is_not_installed() {
+        let mut report = good_report();
+        let recorder = report
+            .units
+            .iter_mut()
+            .find(|u| u.name == "icpc-screen-record")
+            .expect("legacy recorder row");
+        recorder.enabled = "not-found".to_owned();
+        assert_eq!(problems(&config(), &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_active_icpc_recorder_is_a_problem_even_if_masked() {
+        let mut report = good_report();
+        let recorder = report
+            .units
+            .iter_mut()
+            .find(|u| u.name == "icpc-screen-record")
+            .expect("legacy recorder row");
+        recorder.active = "active".to_owned();
+        assert_eq!(
+            problems(&config(), &report),
+            ["icpc-screen-record is active, expected inactive"]
         );
     }
 
