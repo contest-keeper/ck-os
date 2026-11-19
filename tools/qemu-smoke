@@ -113,6 +113,7 @@ run_checks() {
     'test "$(stat -c %u:%g:%a /ck-config)" = 0:0:700 && ! runuser -u contestant -- ls /ck-config >/dev/null 2>&1 && echo CK40_ckconfig_$((1+1))'
     # systemctl on Noble quotes unit names containing backslashes and doubles the backslashes.
     'mount_unit=$(systemd-escape --path --suffix=mount /ck-config); systemctl show -p After --value ck-config.service | tr " " "\n" | grep -Fxq -e "$mount_unit" -e "$(printf "\"%q\"" "$mount_unit")" && echo CK41_ckconfig_$((3+4))'
+    'runuser -u contestant -- notify-send --version >/dev/null && echo CK42_notify_$((3+5))'
     'echo .example.com >/etc/squid/acl_allowed_domains.txt; systemctl restart squid; sleep 3'
     "curl $proxy -w 'CK3_%{http_code}\n' https://example.com/"
     "curl $proxy -w 'CK4_%{http_code}\n' https://example.org/"
@@ -169,6 +170,7 @@ run_checks() {
   expect 'CK39_ckconfig_5' 'CKCONFIG is mounted read-only at /ck-config'
   expect 'CK40_ckconfig_2' 'only root can read the CKCONFIG partition'
   expect 'CK41_ckconfig_7' 'ck-config is ordered after the CKCONFIG mount'
+  expect 'CK42_notify_8' 'the contestant session can launch notify-send for Hub messages'
   expect 'CK3_200' 'an allowed site works through Squid (CA trusted, capture up)'
   if grep -q 'CK4_200' "$log"; then
     echo "FAIL a site that is not allowed was reachable" >&2
