@@ -10,5 +10,8 @@
   "chat.disableAIFeatures": true,
   "chat.commandCenter.enabled": false,
   "workbench.settings.enableNaturalLanguageSearch": false,
-  "clangd.path": "/usr/bin/clangd"
+  "clangd.path": "/usr/bin/clangd",
+  "terminal.integrated.defaultProfile.linux": "off",
+  "terminal.integrated.profiles.linux": { "off": { "path": "/bin/false" } },
+  "terminal.integrated.enablePersistentSessions": false
 }

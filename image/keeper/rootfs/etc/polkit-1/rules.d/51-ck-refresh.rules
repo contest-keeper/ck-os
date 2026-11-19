@@ -1,0 +1,7 @@
+// Keeper OS: the contestant may start the Refresh Connection unit and nothing else in systemd.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "contestant" && action.id === "org.freedesktop.systemd1.manage-units" &&
+      action.lookup("unit") === "ck-refresh-connection.service" && action.lookup("verb") === "start") {
+    return polkit.Result.YES;
+  }
+});

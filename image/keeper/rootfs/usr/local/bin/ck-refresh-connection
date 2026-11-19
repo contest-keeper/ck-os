@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Refresh Connection: restart Squid so it asks DNS again, then check that every allowed site answers.
+
+The contestant has no sudo. The restart is a root unit (ck-refresh-connection.service) that a polkit rule lets
+the contestant start, and nothing else. Usage: ck-refresh-connection [--no-gui]
+"""
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DOMAINS_FILE = "/etc/squid/acl_allowed_domains.txt"
+PROXY = "http://127.0.0.1:3128"
+
+
+def allowed_domains():
+    domains = []
+    with open(DOMAINS_FILE, encoding="utf-8") as file:
+        for line in file:
+            name = line.split("#")[0].strip().lstrip(".")
+            if name:
+                domains.append(name)
+    return domains
+
+
+def wait_for_squid():
+    for _ in range(30):
+        probe = subprocess.run(["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"], capture_output=True)
+        if probe.returncode == 0:
+            return True
+        time.sleep(1)
+    return False
+
+
+def answers(domain):
+    # Any HTTP answer through the proxy counts (a 403 or 404 still proves the way works); an error from the
+    # proxy itself (denied, capture down, name not found) or no answer does not.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}))
+    try:
+        opener.open("https://" + domain + "/", timeout=10)
+        return True
+    except urllib.error.HTTPError as error:
+        return error.code < 500
+    except Exception:
+        return False
+
+
+def main():
+    gui = "--no-gui" not in sys.argv[1:]
+    restart = subprocess.run(["systemctl", "start", "ck-refresh-connection.service"], capture_output=True)
+    lines = []
+    if restart.returncode != 0:
+        lines.append("Could not refresh the connection.")
+    elif not wait_for_squid():
+        lines.append("The proxy did not come back. Tell a supervisor.")
+    failed = bool(lines)
+    if not failed:
+        for domain in allowed_domains():
+            ok = answers(domain)
+            failed = failed or not ok
+            print("ck-refresh " + ("ok " if ok else "FAILED ") + domain)
+            lines.append(("OK      " if ok else "NO ANSWER  ") + domain)
+    else:
+        print("ck-refresh FAILED " + " ".join(lines))
+    if gui:
+        kind = "--warning" if failed else "--info"
+        subprocess.run(["zenity", kind, "--title=Refresh Connection", "--no-markup",
+                        "--text=" + "\n".join(lines or ["No allowed sites are set."])], check=False)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

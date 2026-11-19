@@ -1,0 +1,7 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Refresh Connection
+Exec=ck-refresh-connection
+Icon=view-refresh
+Terminal=false
