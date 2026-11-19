@@ -98,6 +98,11 @@ mod tests {
         use super::*;
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        /// Starting a program while another test still has its script open for writing fails with
+        /// "Text file busy" (the child inherits the open file). These tests take turns.
+        static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
         /// A stand-in that records its arguments and what it reads on stdin.
         fn fake(dir: &Path, exit_code: i32) -> std::path::PathBuf {
@@ -113,6 +118,7 @@ mod tests {
 
         #[test]
         fn the_hash_goes_on_stdin_and_never_in_the_arguments() {
+            let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
             let dir = tempfile::TempDir::new().expect("temp dir");
             let program = fake(dir.path(), 0);
 
@@ -131,6 +137,7 @@ mod tests {
 
         #[test]
         fn a_failing_chpasswd_is_an_error_without_the_hash() {
+            let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
             let dir = tempfile::TempDir::new().expect("temp dir");
             let program = fake(dir.path(), 1);
 
