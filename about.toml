@@ -1,0 +1,13 @@
+# The licences allowed for the crates inside ck-agent (the same list as deny.toml).
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+]
+targets = ["x86_64-unknown-linux-musl"]
