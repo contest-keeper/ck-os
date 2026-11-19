@@ -1,0 +1,17 @@
+Third-party licences (Rust crates in ck-agent)
+
+Contest Keeper itself is licensed under Apache-2.0. The programs in this release contain the
+open-source crates listed below. Each licence text is given once, followed by the crates that use it.
+
+{{#each licenses}}
+================================================================================
+{{name}} ({{id}})
+
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}
