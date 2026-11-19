@@ -1,0 +1,31 @@
+Keeper OS @VERSION@: offer of source code
+===========================================
+
+This profile builds Keeper OS from Debian 13 (trixie). The package list is
+keeper-os-@VERSION@.packages.txt. Copyright and licence notices are kept under
+/usr/share/doc/<package>/copyright inside the image.
+
+The snapshot archive has the corresponding source for its packages:
+
+  https://snapshot.debian.org/archive/debian/@SNAPSHOT@/
+  https://snapshot.debian.org/archive/debian-security/@SNAPSHOT@/
+
+Add the same release, updates and security suites as deb-src entries and use
+apt-get source <package>=<version> to retrieve the source for a specific package.
+
+The pinned downloads are recorded in tools/build-image:
+
+  VSCodium @CODIUM_VERSION@ (MIT), https://github.com/VSCodium/vscodium
+  clangd extension (MIT), https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd
+  Firefox @FIREFOX_VERSION@ (MPL 2.0 and others), https://hg.mozilla.org/mozilla-central/
+  Kotlin compiler (Apache 2.0), https://github.com/JetBrains/kotlin/
+
+Keeper OS code and build scripts (Apache 2.0):
+
+  https://github.com/contest-keeper/ck-os
+
+For at least three years after you receive this image, we will provide the complete
+corresponding source for the GPL or LGPL programs in it on request, on a medium
+customarily used for software exchange, for no more than the cost of doing so.
+Open a request at https://github.com/contest-keeper/ck-os/issues and include the
+image version (@VERSION@) and the program.
