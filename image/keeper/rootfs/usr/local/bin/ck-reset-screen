@@ -1,0 +1,7 @@
+#!/bin/bash
+# Session start of the reset login: show a full-screen "resetting" message and start the reset. Other users'
+# desktops also run this autostart entry, so it does nothing for anybody but ckreset.
+[[ $(id -un) == ckreset ]] || exit 0
+systemctl start --no-block ck-team-reset.service
+exec zenity --progress --pulsate --no-cancel --width=500 --title="Keeper OS" \
+  --text="Resetting this computer for the next team. Please wait, it restarts by itself." --auto-close

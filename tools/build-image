@@ -165,7 +165,7 @@ install_payload() {
   done < <(list_payload_paths "$payload" f)
   # Programs payload_file_mode does not know (it names the ICPC patch's own files).
   if [[ -d $payload/usr/local/sbin ]]; then chmod 0755 "$payload"/usr/local/sbin/*; fi
-  for f in ck-wallpaper ck-toolchains ck-refresh-connection; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
+  for f in ck-wallpaper ck-toolchains ck-refresh-connection ck-reset-screen; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
   # Desktop launchers must be executable or xfdesktop asks the user whether to trust them.
   if [[ -d $payload/etc/skel/Desktop ]]; then chmod 0755 "$payload"/etc/skel/Desktop/*.desktop; fi
   cp -r --no-preserve=ownership "$payload/." "$MNT/"
@@ -241,7 +241,12 @@ EOF
 last_change=$(date -u -d "@$SOURCE_DATE_EPOCH" +%F)
 chroot "$MNT" useradd --create-home --shell /bin/bash contestant
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups sudo ckadmin
-for account in contestant ckadmin root; do
+# The reset login : no password, listed on the login screen, its session only starts
+# the reset (ck-reset-screen and polkit rule 52-ck-reset.rules). lightdm lets members of nopasswdlogin in without one.
+grep -q nopasswdlogin "$MNT/etc/pam.d/lightdm" || { echo "ERROR: lightdm PAM has no nopasswdlogin line" >&2; exit 1; }
+chroot "$MNT" groupadd --force nopasswdlogin
+chroot "$MNT" useradd --create-home --shell /bin/bash --groups nopasswdlogin ckreset
+for account in contestant ckadmin ckreset root; do
   chroot "$MNT" passwd --lock "$account" >/dev/null
   chroot "$MNT" chage --lastday "$last_change" "$account"
 done
