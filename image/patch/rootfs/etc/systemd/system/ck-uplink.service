@@ -15,7 +15,7 @@ ProtectHome=tmpfs
 BindReadOnlyPaths=/run/user
 ProtectSystem=strict
 # The queue of events waiting for the Hub, created root-only by systemd.
-StateDirectory=ck/queue
+StateDirectory=ck/queue ck/enrolment
 StateDirectoryMode=0700
 
 [Install]

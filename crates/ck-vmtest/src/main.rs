@@ -16,9 +16,13 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use ck_agent_config::{Source, read_with_esp_fallback};
-use ck_protocol::{CONFIG_FILE, ESP_CONFIG_DIR, ESP_CONFIG_FILE, StickConfig};
+use ck_protocol::{
+    CONFIG_FILE, ENROLMENT_SCHEMA, ESP_CONFIG_DIR, ESP_CONFIG_FILE, EnrolmentConfig, Problem,
+    StickConfig,
+};
 use clap::Parser;
 
+use check::ExpectedConfig;
 use qemu::{Machine, Options};
 
 const EXIT_FAIL: u8 = 1;
@@ -167,13 +171,16 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
     }
 }
 
-fn read_config(image: &Path) -> Result<StickConfig, String> {
-    let bytes = read_with_esp_fallback(
-        |source| match source {
-            Source::CkConfig => ck_image::read_config_file(image, CONFIG_FILE),
-            Source::Esp => {
-                ck_image::read_file(image, &format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}"))
+fn read_config(image: &Path) -> Result<ExpectedConfig, String> {
+    let (source, bytes) = read_with_esp_fallback(
+        |source| {
+            match source {
+                Source::CkConfig => ck_image::read_config_file(image, CONFIG_FILE),
+                Source::Esp => {
+                    ck_image::read_file(image, &format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}"))
+                }
             }
+            .map(|bytes| (source, bytes))
         },
         |error| {
             matches!(
@@ -183,14 +190,45 @@ fn read_config(image: &Path) -> Result<StickConfig, String> {
         },
     )
     .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
-    let config: StickConfig = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("the settings in the image are not valid: {e}"))?;
+    let invalid = |error| format!("the settings in the image are not valid: {error}");
+    let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+    if source == Source::CkConfig && json["schema"].as_u64() == Some(u64::from(ENROLMENT_SCHEMA)) {
+        let config: EnrolmentConfig = serde_json::from_slice(&bytes).map_err(invalid)?;
+        let expected = ExpectedConfig {
+            stick_id: config.stick_id,
+            settings: config.settings,
+            machine_number: config.machine_number,
+        };
+        if expected.machine_number == Some(0) {
+            return Err(format!(
+                "the settings in the image are not valid: {}",
+                Problem::MachineNumberZero
+            ));
+        }
+        if let Some(problem) = expected.settings.validate().first() {
+            return Err(format!(
+                "the settings in the image are not valid: {problem}"
+            ));
+        }
+        if expected.computer_name().is_empty() {
+            return Err(format!(
+                "the settings in the image are not valid: {}",
+                Problem::ComputerNameUnusable
+            ));
+        }
+        return Ok(expected);
+    }
+    let config: StickConfig = serde_json::from_slice(&bytes).map_err(invalid)?;
     if let Some(problem) = config.validate().first() {
         return Err(format!(
             "the settings in the image are not valid: {problem}"
         ));
     }
-    Ok(config)
+    Ok(ExpectedConfig {
+        stick_id: config.stick_id,
+        settings: config.settings,
+        machine_number: config.machine_number,
+    })
 }
 
 /// A screenshot only helps when the machine is still running, so a missing one is not an error.

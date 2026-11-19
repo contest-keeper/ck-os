@@ -34,6 +34,8 @@ pub enum RecordingError {
     Connection,
     #[error("the Hub returned invalid recording progress")]
     Reply,
+    #[error("checking whether the stick has enrolled: {0}")]
+    Enrolment(#[source] crate::Error),
 }
 
 #[derive(Serialize)]
@@ -69,6 +71,12 @@ impl Uplink {
         let folder = self.root.join(FOLDER);
         if let Some(days) = settings.recording.retention_days {
             prune_expired(&folder, days, SystemTime::now())?;
+        }
+        if self
+            .enrolment_pending()
+            .map_err(RecordingError::Enrolment)?
+        {
+            return Ok(0);
         }
         let Some(url) = self.address(PATH) else {
             return Ok(0);

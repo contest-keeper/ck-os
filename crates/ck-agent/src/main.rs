@@ -24,7 +24,8 @@ const QUEUE_FOLDER: &str = "var/lib/ck/queue";
 #[command(
     name = "ck-agent",
     version,
-    about = "The Contest Keeper agent on the stick"
+    about = "The Contest Keeper agent on the stick",
+    long_about = "The Contest Keeper agent on the stick. Supports Keeper OS enrolment schema 3."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -407,6 +408,10 @@ fn uplink(root: &std::path::Path, once: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Err(error) = uplink.claim_enrolment() {
+        tracing::warn!("the stick could not enrol: {error}");
+        return ExitCode::FAILURE;
+    }
     let Some(url) = uplink.url() else {
         tracing::info!("the settings name no server, so nothing is reported");
         return ExitCode::SUCCESS;

@@ -29,6 +29,44 @@ fn read(dir: &TempDir, path: &str) -> String {
 }
 
 #[test]
+fn first_boot_keeps_the_same_private_key_without_putting_it_in_config() {
+    let (dir, root) = stick(SETTINGS);
+    let config_path = dir.path().join("ck-config");
+    fs::create_dir_all(&config_path).expect("ckconfig");
+    let enrolling = SETTINGS
+        .replace(r#""schema": 1"#, r#""schema": 3"#)
+        .replace(
+            r#""token": "the-secret""#,
+            r#""enrolment_code": "ABCD-EFGH-JKLM-NPQR-STUV""#,
+        );
+    fs::write(config_path.join("config.json"), &enrolling).expect("enrolment config");
+
+    let first = load(&root).expect("first boot prepares the key");
+    apply_basics(&root, &first).expect("apply basic settings");
+    let again = load(&root).expect("restart reads the same key");
+    assert_eq!(first.config.stick_id, again.config.stick_id);
+    assert_eq!(first.config.token, again.config.token);
+    assert_eq!(read(&dir, "etc/ck/config.json"), enrolling);
+    assert_eq!(first.config.token.expose().len(), 43);
+
+    let keys: Vec<_> = fs::read_dir(dir.path().join("var/lib/ck/enrolment"))
+        .expect("enrolment state")
+        .collect::<Result<_, _>>()
+        .expect("enrolment state files");
+    assert_eq!(keys.len(), 1);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = keys[0]
+            .metadata()
+            .expect("key metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}
+
+#[test]
 fn applies_the_settings_to_the_system_files() {
     let (dir, root) = stick(SETTINGS);
     let loaded = load(&root).expect("valid settings");

@@ -198,6 +198,10 @@ install_payload "$REPO/image/patch/rootfs" patch
 # Files that exist only on Keeper OS: the Squid settings and the per-stick CA service.
 install_payload "$REPO/image/keeper/rootfs" keeper
 printf 'keeper-os %s\n' "$VERSION" >"$MNT/etc/ck/image-version"
+# Forge reads this from the raw image before offering first-boot enrolment.
+if [[ -r $AGENT ]] && grep -aFq 'Supports Keeper OS enrolment schema 3.' "$AGENT"; then
+  printf '3\n' >"$MNT/etc/ck/enrolment-schema"
+fi
 # xfconf merges a settings channel from every config directory, so the stock shortcut file that xfce4-settings
 # keeps in /etc/xdg/xfce4 (it has a Ctrl+Alt+T terminal shortcut) must be replaced by the locked one as well.
 install -m 0644 "$MNT/etc/xdg/xdg-xubuntu/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml" \

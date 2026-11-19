@@ -5,6 +5,7 @@
 //! proxy settings of the contestant's session.
 
 mod commands;
+mod enrolment;
 mod queue;
 mod recordings;
 
@@ -16,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ck_agent_config::{PendingEnrolment, Root, read_applied_config};
 use ck_protocol::{
     HEARTBEAT_PATH, Heartbeat, HeartbeatReply, RecorderState, RecorderStatus, RecordingMode,
     SIGNATURE_HEADER, STICK_HEADER, StickConfig, Timestamp,
@@ -46,6 +48,18 @@ pub enum Error {
     Unreachable(String),
     #[error("the event queue: {0}")]
     Queue(String),
+    #[error("the Hub address must use HTTPS for enrolment")]
+    EnrolmentAddress,
+    #[error("the Hub rejected the enrolment: HTTP {0}")]
+    EnrolmentRejected(u16),
+    #[error("cannot reach the Hub to enrol this stick")]
+    EnrolmentConnection,
+    #[error("the Hub did not confirm this stick's enrolment")]
+    EnrolmentAnswer,
+    #[error("this stick has not enrolled yet")]
+    EnrolmentPending,
+    #[error("cannot use the enrolment state: {0}")]
+    EnrolmentState(#[source] ck_agent_config::Error),
 }
 
 /// Whether this image carries both the screen helper and the systemd service that runs it.
@@ -58,6 +72,7 @@ pub fn screen_unlock_supported(root: &Path) -> bool {
 pub struct Uplink {
     root: PathBuf,
     config: StickConfig,
+    enrolment: Option<PendingEnrolment>,
     boot_id: String,
     seq: u64,
 }
@@ -72,8 +87,8 @@ impl Uplink {
                 Error::Io(e)
             }
         })?;
-        let config: StickConfig =
-            serde_json::from_slice(&bytes).map_err(|e| Error::BadSettings(e.to_string()))?;
+        let (config, enrolment) = read_applied_config(&Root::new(root), &bytes)
+            .map_err(|error| Error::BadSettings(error.to_string()))?;
         let problems = config.validate();
         if !problems.is_empty() {
             let text: Vec<String> = problems.iter().map(ToString::to_string).collect();
@@ -86,6 +101,7 @@ impl Uplink {
         Ok(Self {
             root: root.to_path_buf(),
             config,
+            enrolment,
             boot_id,
             seq,
         })
@@ -207,6 +223,9 @@ impl Uplink {
     /// Posts `body` signed with the stick's secret and returns the answer's body, at most
     /// `MAX_ANSWER_BYTES` of it.
     fn post(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
+        if self.enrolment_pending()? {
+            return Err(Error::EnrolmentPending);
+        }
         let signature = ck_crypto::sign(&self.config.token, body);
 
         // `proxy(None)`: the Hub is reached directly, whatever the session's proxy settings say.

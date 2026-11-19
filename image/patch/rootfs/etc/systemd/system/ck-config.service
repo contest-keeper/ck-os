@@ -11,6 +11,8 @@ Before=squid.service display-manager.service ck-recorder.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/ck-agent apply-config
+StateDirectory=ck/enrolment
+StateDirectoryMode=0700
 # Exit code 3 means there are no settings, so the image keeps its defaults. That is a normal
 # state for a stick that was never configured, not a failure.
 SuccessExitStatus=3
