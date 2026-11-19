@@ -136,7 +136,7 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # answers 503 for a while, so apt retries each download.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
 mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' \
-  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
   --customize-hook='chroot "$1" unzip -q /tmp/kotlin.zip -d /opt' \
@@ -165,12 +165,18 @@ install_payload() {
   done < <(list_payload_paths "$payload" f)
   # Programs payload_file_mode does not know (it names the ICPC patch's own files).
   if [[ -d $payload/usr/local/sbin ]]; then chmod 0755 "$payload"/usr/local/sbin/*; fi
-  for f in ck-wallpaper ck-toolchains; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
+  for f in ck-wallpaper ck-toolchains ck-refresh-connection; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
+  # Desktop launchers must be executable or xfdesktop asks the user whether to trust them.
+  if [[ -d $payload/etc/skel/Desktop ]]; then chmod 0755 "$payload"/etc/skel/Desktop/*.desktop; fi
   cp -r --no-preserve=ownership "$payload/." "$MNT/"
 }
 install_payload "$REPO/image/patch/rootfs" patch
 # Files that exist only on Keeper OS: the Squid settings and the per-stick CA service.
 install_payload "$REPO/image/keeper/rootfs" keeper
+# xfconf merges a settings channel from every config directory, so the stock shortcut file that xfce4-settings
+# keeps in /etc/xdg/xfce4 (it has a Ctrl+Alt+T terminal shortcut) must be replaced by the locked one as well.
+install -m 0644 "$MNT/etc/xdg/xdg-xubuntu/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml" \
+  "$MNT/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml"
 # 13 is the proxy user and group in the image (the host has no such name to look up).
 chown 13:13 "$MNT/etc/squid/acl_allowed_domains.txt"
 # Masked services are linked to /dev/null; removed files are deleted.
@@ -257,6 +263,9 @@ echo "== remove Ubuntu branding, add the source offer"
 BRANDING_PACKAGES=(xubuntu-core xubuntu-desktop-minimal xubuntu-artwork xubuntu-wallpapers ubuntu-mono
   plymouth-theme-ubuntu-text plymouth-theme-xubuntu-logo plymouth-theme-xubuntu-text)
 chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
+# Desktop lockdown (threat 1): no terminal program except xterm, which Code::Blocks and Geany start to run a
+# contestant's console program. xterm has no menu entry, launcher or shortcut (see image/keeper/rootfs/etc/xdg).
+chroot "$MNT" dpkg --purge --force-depends gnome-terminal gnome-terminal-data
 cat >"$MNT/usr/lib/os-release" <<EOF
 PRETTY_NAME="Keeper OS $VERSION"
 NAME="Keeper OS"
@@ -326,6 +335,12 @@ fi
 # Microsoft VS Code, and every installed package keeps its licence notice.
 if grep -qE '^(xubuntu-core|xubuntu-desktop-minimal|xubuntu-artwork|xubuntu-wallpapers|ubuntu-mono|plymouth-theme-(ubuntu|xubuntu)[a-z-]*|code) ' "$OUT/keeper-os-$VERSION.packages.txt"; then
   echo "ERROR: a branding or Microsoft package is still installed" >&2
+  exit 1
+fi
+if grep -qE '^(gnome-terminal|xfce4-terminal) ' "$OUT/keeper-os-$VERSION.packages.txt" \
+  || ! grep -q '^xterm ' "$OUT/keeper-os-$VERSION.packages.txt" \
+  || ! grep -q '^xfce4-session ' "$OUT/keeper-os-$VERSION.packages.txt" || ! grep -q '^lightdm ' "$OUT/keeper-os-$VERSION.packages.txt"; then
+  echo "ERROR: desktop lockdown: a terminal program is installed besides xterm, or the desktop itself is gone" >&2
   exit 1
 fi
 if grep -iE '^(menuentry|submenu) ' "$MNT/boot/grub/grub.cfg" | grep -qi ubuntu; then

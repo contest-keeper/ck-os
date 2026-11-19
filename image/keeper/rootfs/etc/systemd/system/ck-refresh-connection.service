@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh Connection: restart Squid so it resolves the allowed sites again
+# Started by the contestant through a polkit rule (51-ck-refresh.rules), so this unit does only that.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart squid.service

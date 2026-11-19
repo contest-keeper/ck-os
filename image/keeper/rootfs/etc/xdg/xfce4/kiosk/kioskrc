@@ -1,0 +1,10 @@
+# Keeper OS: the contestant cannot change the panel or the session, and cannot shut the machine down.
+[xfce4-panel]
+CustomizePanel=NONE
+
+[xfce4-session]
+CustomizeChooser=NONE
+CustomizeLogout=NONE
+CustomizeSplash=NONE
+SaveSession=NONE
+Shutdown=NONE
