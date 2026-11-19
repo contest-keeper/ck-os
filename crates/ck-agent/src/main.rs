@@ -48,6 +48,12 @@ enum Command {
         #[arg(long)]
         once: bool,
     },
+    /// Upload a batch of completed recordings and apply local retention
+    UploadRecordings {
+        /// The folder that stands for / in tests
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+    },
     /// Add an event to the queue `uplink` sends from, for tools and tests
     Enqueue {
         /// The folder that stands for `/` (only for tests; the stick uses `/`)
@@ -105,6 +111,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::ApplyConfig { root } => apply_config(&Root::new(root)),
         Command::Uplink { root, once } => uplink(&root, once),
+        Command::UploadRecordings { root } => upload_recordings(&root),
         Command::Enqueue {
             root,
             kind,
@@ -360,6 +367,29 @@ fn set_running_hostname(name: &str) {
         Ok(status) if status.success() => tracing::info!("computer name set to {name}"),
         Ok(status) => tracing::warn!("could not set the computer name ({status})"),
         Err(error) => tracing::warn!("could not set the computer name: {error}"),
+    }
+}
+
+fn upload_recordings(root: &std::path::Path) -> ExitCode {
+    let uplink = match Uplink::load(root) {
+        Ok(uplink) => uplink,
+        Err(ck_agent_uplink::Error::NoSettings) => return ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!("cannot read recording settings: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match uplink.upload_recordings() {
+        Ok(sent) => {
+            if sent > 0 {
+                tracing::info!(sent, "recordings confirmed by the Hub");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::warn!("recording upload or retention will retry later: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 

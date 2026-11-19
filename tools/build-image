@@ -160,7 +160,7 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # answers 503 for a while, so apt retries each download.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
 mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' \
-  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
+  --include=apt,systemd-sysv,linux-image-generic,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,sudo,locales,ca-certificates,xubuntu-core,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
   --customize-hook='chroot "$1" unzip -q /tmp/kotlin.zip -d /opt' \
@@ -336,6 +336,7 @@ chmod 0644 "$MNT/usr/share/doc/codium/copyright" "$MNT/usr/share/doc/firefox/cop
 # One network manager (NetworkManager): systemd-networkd would also configure the links, so it is masked.
 chroot "$MNT" systemctl mask systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
 chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service
+chroot "$MNT" systemctl enable ck-recording-upload.timer
 # UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
 # --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
 chroot "$MNT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --uefi-secure-boot
