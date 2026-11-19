@@ -1,6 +1,9 @@
 name: Keeper OS image
 
 on:
+  push:
+    branches: [develop]
+    paths: ['.github/workflows/keeper-image.yml']
   workflow_call:
     inputs:
       tag:
@@ -20,15 +23,16 @@ defaults:
 jobs:
   image:
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop') ||
+      (github.ref == 'refs/heads/develop' &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.tag != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Configure the existing environment approval and a separate blob-scoped OIDC publisher for
     # each target. Enable CK_IMAGE_PUBLISH_ENABLED in that environment once it is ready.
-    environment: ${{ github.event_name == 'workflow_dispatch' && 'develop' || 'production' }}
+    environment: ${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
     concurrency:
-      group: keeper-os-image-${{ github.event_name == 'workflow_dispatch' && 'develop' || 'production' }}
+      group: keeper-os-image-${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
       cancel-in-progress: false
     env:
       RELEASE_TAG: ${{ inputs.tag }}
