@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use ck_protocol::StickConfig;
+use ck_protocol::{CONFIG_FILE, ESP_CONFIG_DIR, ESP_CONFIG_FILE, StickConfig};
 use clap::Parser;
 
 use qemu::{Machine, Options};
@@ -165,10 +165,23 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
 }
 
 fn read_config(image: &Path) -> Result<StickConfig, String> {
-    let bytes = ck_image::read_file(image, "ck/config.json")
+    // Match the agent: use the legacy copy only when there is no CKCONFIG file.
+    let bytes = ck_image::read_config_file(image, CONFIG_FILE)
+        .or_else(|error| match error {
+            ck_image::Error::NoConfigPartition | ck_image::Error::FileNotFound(_) => {
+                ck_image::read_file(image, &format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}"))
+            }
+            error => Err(error),
+        })
         .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| format!("the settings in the image are not valid: {e}"))
+    let config: StickConfig = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("the settings in the image are not valid: {e}"))?;
+    if let Some(problem) = config.validate().first() {
+        return Err(format!(
+            "the settings in the image are not valid: {problem}"
+        ));
+    }
+    Ok(config)
 }
 
 /// A screenshot only helps when the machine is still running, so a missing one is not an error.

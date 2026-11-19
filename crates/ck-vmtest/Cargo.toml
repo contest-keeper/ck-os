@@ -10,7 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-ck-image = { git = "https://github.com/contest-keeper/ck-protocol", rev = "e3db30a1eeb3ba4d715478624a32aa45192d8a5a", version = "0.1.0" }
+ck-image = { git = "https://github.com/contest-keeper/ck-protocol", rev = "a4dc883d88305ebba65392f906ec4b86f4cc9798", version = "0.1.0" }
 ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "e3db30a1eeb3ba4d715478624a32aa45192d8a5a", version = "0.1.0" }
 ck-selftest = { path = "../ck-selftest", version = "0.1.0" }
 clap = { version = "4.5.51", features = ["derive"] }

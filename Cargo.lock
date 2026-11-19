@@ -195,7 +195,7 @@ dependencies = [
 [[package]]
 name = "ck-image"
 version = "0.1.0"
-source = "git+https://github.com/contest-keeper/ck-protocol?rev=e3db30a1eeb3ba4d715478624a32aa45192d8a5a#e3db30a1eeb3ba4d715478624a32aa45192d8a5a"
+source = "git+https://github.com/contest-keeper/ck-protocol?rev=a4dc883d88305ebba65392f906ec4b86f4cc9798#a4dc883d88305ebba65392f906ec4b86f4cc9798"
 dependencies = [
  "crc32fast",
  "fatfs",
