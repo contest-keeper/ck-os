@@ -111,7 +111,8 @@ run_checks() {
     'nft list table inet ck_netlock >/dev/null && echo CK2_netlock_table'
     'findmnt -nr -M /ck-config -o FSTYPE,VFS-OPTIONS | grep -qE "^vfat (.*,)?ro(,|$)" && echo CK39_ckconfig_$((2+3))'
     'test "$(stat -c %u:%g:%a /ck-config)" = 0:0:700 && ! runuser -u contestant -- ls /ck-config >/dev/null 2>&1 && echo CK40_ckconfig_$((1+1))'
-    'systemctl show -p After --value ck-config.service | tr " " "\n" | grep -Fxq "$(systemd-escape --path --suffix=mount /ck-config)" && echo CK41_ckconfig_$((3+4))'
+    # systemctl on Noble quotes unit names containing backslashes and doubles the backslashes.
+    'mount_unit=$(systemd-escape --path --suffix=mount /ck-config); systemctl show -p After --value ck-config.service | tr " " "\n" | grep -Fxq -e "$mount_unit" -e "$(printf "\"%q\"" "$mount_unit")" && echo CK41_ckconfig_$((3+4))'
     'echo .example.com >/etc/squid/acl_allowed_domains.txt; systemctl restart squid; sleep 3'
     "curl $proxy -w 'CK3_%{http_code}\n' https://example.com/"
     "curl $proxy -w 'CK4_%{http_code}\n' https://example.org/"
