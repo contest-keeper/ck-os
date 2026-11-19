@@ -112,11 +112,26 @@ index (it holds build times).
 timestamp per entry, so it differs between builds. It is kept in the image (Java needs it) and the stick's own CA is
 added to it at first boot.
 
-Verified 2026-11-18: two builds from the same package set gave the same root filesystem hash. That run used the live
-Ubuntu archive (`CK_MIRROR=http://archive.ubuntu.com/ubuntu`) because snapshot.ubuntu.com answered 503 for every date
-for several hours; the hash is `c4c85bf6e0e1c4d47307ca1da62edff2612aa70609926bbfbd1e18f7b6bf6b4b` for that package
-set only. **Open:** repeat the comparison with the default snapshot once it answers again. Package downloads now retry
-(`Acquire::Retries 8`).
+Verified 2026-11-19 on the default snapshot (`20261117T000000Z`): two builds with the same flags (`--debug-login
+--no-compress`) gave the same root filesystem hash,
+`5660393950975a35eb9630fcecb21b87abd6b24863903c7ae3be9105dfb7a369`. (The earlier 2026-11-18 comparison had to use the
+live Ubuntu archive because snapshot.ubuntu.com answered 503; its hash applied to that package set only.) Package
+downloads retry (`Acquire::Retries 8`).
+
+### Branding, licence notices and network manager
+
+- **No Ubuntu trademarks.** The build purges `xubuntu-core`, `xubuntu-desktop-minimal`, `xubuntu-artwork`,
+  `xubuntu-wallpapers`, `ubuntu-mono` and the Ubuntu and Xubuntu boot-theme packages, writes `os-release`,
+  `/etc/issue` and `/etc/issue.net` as Keeper OS, and sets `GRUB_DISTRIBUTOR="Keeper OS"`. It stops if any of that
+  comes back. `xubuntu-default-settings` (configuration only) stays, with its dependency on the removed artwork
+  ignored by dpkg; nothing installs packages on a contest stick. Still open (A4/A8): the signed GRUB and shim binaries
+  are Canonical's and print their own strings, the `fonts-ubuntu` font stays, and the question to Canonical
+  (`docs/licences.md`) is not answered yet.
+- **Source offer.** `SOURCE-OFFER.txt` (from `image/SOURCE-OFFER.txt.in`) is written next to the image and into
+  `/usr/share/doc/keeper-os/`. The CI upload comes with step A6.
+- **Licence notices.** The build stops if an installed package has no `/usr/share/doc/<package>/copyright`. VSCodium
+  and Firefox ship none, so the build adds one for each.
+- **One network manager.** NetworkManager only; `systemd-networkd` is masked.
 
 ### Checks in the guest
 
