@@ -45,6 +45,7 @@ add_agent_binary "$agent_file" "$payload_directory"
 : >"$commands_file"
 
 # 3. Plan the changes. The image is not written during these steps.
+prepare_legacy_reset "$filesystem" "$work_directory" "$payload_directory"
 queue_missing_directories "$payload_directory" "$filesystem" "$commands_file"
 queue_payload_files "$payload_directory" "$commands_file"
 queue_disabled_services "$patch_directory/mask-units.txt" "$commands_file"
