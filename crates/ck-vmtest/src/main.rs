@@ -5,6 +5,8 @@
 //! port, and the report is compared with the settings stored in the image itself.
 
 mod check;
+#[cfg(test)]
+mod config_tests;
 mod qemu;
 
 use std::fs;
@@ -13,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use ck_agent_config::{Source, read_with_esp_fallback};
 use ck_protocol::{CONFIG_FILE, ESP_CONFIG_DIR, ESP_CONFIG_FILE, StickConfig};
 use clap::Parser;
 
@@ -165,15 +168,21 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
 }
 
 fn read_config(image: &Path) -> Result<StickConfig, String> {
-    // Match the agent: use the legacy copy only when there is no CKCONFIG file.
-    let bytes = ck_image::read_config_file(image, CONFIG_FILE)
-        .or_else(|error| match error {
-            ck_image::Error::NoConfigPartition | ck_image::Error::FileNotFound(_) => {
+    let bytes = read_with_esp_fallback(
+        |source| match source {
+            Source::CkConfig => ck_image::read_config_file(image, CONFIG_FILE),
+            Source::Esp => {
                 ck_image::read_file(image, &format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}"))
             }
-            error => Err(error),
-        })
-        .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
+        },
+        |error| {
+            matches!(
+                error,
+                ck_image::Error::NoConfigPartition | ck_image::Error::FileNotFound(_)
+            )
+        },
+    )
+    .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
     let config: StickConfig = serde_json::from_slice(&bytes)
         .map_err(|e| format!("the settings in the image are not valid: {e}"))?;
     if let Some(problem) = config.validate().first() {

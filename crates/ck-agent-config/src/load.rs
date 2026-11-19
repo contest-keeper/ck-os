@@ -42,6 +42,17 @@ pub struct Loaded {
     pub sha256: String,
 }
 
+/// Read the legacy ESP only when the CKCONFIG partition or its settings file is missing.
+pub fn read_with_esp_fallback<T, E>(
+    mut read: impl FnMut(Source) -> Result<T, E>,
+    is_missing: impl FnOnce(&E) -> bool,
+) -> Result<T, E> {
+    match read(Source::CkConfig) {
+        Err(error) if is_missing(&error) => read(Source::Esp),
+        result => result,
+    }
+}
+
 impl std::fmt::Debug for Loaded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Loaded")
@@ -57,20 +68,23 @@ impl std::fmt::Debug for Loaded {
 /// treat differently from a bad file. A `CKCONFIG` file that exists but is bad is an error: the
 /// old copy is not used instead.
 pub fn load(root: &Root) -> Result<Loaded, Error> {
-    for source in [Source::CkConfig, Source::Esp] {
-        let file_name = match source {
-            Source::CkConfig => CONFIG_FILE,
-            Source::Esp => ESP_CONFIG_FILE,
-        };
-        let path = format!("{}/{file_name}", source.folder());
-        match load_from(root, source, &path) {
-            Err(Error::SettingsMissing(_)) => {}
-            other => return other,
-        }
+    let result = read_with_esp_fallback(
+        |source| {
+            let file_name = match source {
+                Source::CkConfig => CONFIG_FILE,
+                Source::Esp => ESP_CONFIG_FILE,
+            };
+            let path = format!("{}/{file_name}", source.folder());
+            load_from(root, source, &path)
+        },
+        |error| matches!(error, Error::SettingsMissing(_)),
+    );
+    match result {
+        Err(Error::SettingsMissing(_)) => Err(Error::SettingsMissing(format!(
+            "{CONFIG_MOUNT_POINT}/{CONFIG_FILE} or {EFI_FOLDER}/{ESP_CONFIG_FILE}"
+        ))),
+        other => other,
     }
-    Err(Error::SettingsMissing(format!(
-        "{CONFIG_MOUNT_POINT}/{CONFIG_FILE} or {EFI_FOLDER}/{ESP_CONFIG_FILE}"
-    )))
 }
 
 fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {

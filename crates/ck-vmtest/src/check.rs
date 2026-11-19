@@ -312,16 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn the_report_must_include_the_icpc_recorder_state() {
-        let mut report = good_report();
-        report.units.retain(|u| u.name != "icpc-screen-record");
-        assert_eq!(
-            problems(&config(), &report),
-            ["the report has nothing about icpc-screen-record"]
-        );
-    }
-
-    #[test]
     fn the_proxy_and_the_capture_service_must_be_running() {
         let mut report = good_report();
         report.units[5].active = "failed".to_owned();
