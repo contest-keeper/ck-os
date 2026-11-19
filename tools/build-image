@@ -201,6 +201,8 @@ install_payload "$REPO/image/keeper/rootfs" keeper
 # keeps in /etc/xdg/xfce4 (it has a Ctrl+Alt+T terminal shortcut) must be replaced by the locked one as well.
 install -m 0644 "$MNT/etc/xdg/xdg-xubuntu/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml" \
   "$MNT/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml"
+# The generic XFCE panel has terminal and application-finder launchers even with a restricted menu.
+python3 "$REPO/image/keeper/lock-panel.py" "$MNT/etc/xdg/xfce4/panel/default.xml"
 # 13 is the proxy user and group in the image (the host has no such name to look up).
 chown 13:13 "$MNT/etc/squid/acl_allowed_domains.txt"
 # Masked services are linked to /dev/null; removed files are deleted.
