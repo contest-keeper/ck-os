@@ -55,6 +55,7 @@ jobs:
           cp out/THIRD-PARTY-LICENSES-ck-agent.txt stage/ck-os-patch/
           cp target/x86_64-unknown-linux-musl/release/ck-agent out/ck-agent-linux-x64
           cp -r image/patch/. stage/ck-os-patch/
+          cp -r image/keeper/rootfs stage/ck-os-patch/keeper-rootfs
           cp out/ck-agent-linux-x64 stage/ck-os-patch/ck-agent
           # The label every stick reports as its image version: the release and the exact commit.
           printf 'ck-os %s (%s)\n' "${TAG#v}" "$(git rev-parse --short=12 HEAD)" \
