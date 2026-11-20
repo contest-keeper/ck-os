@@ -124,8 +124,8 @@ run_checks() {
     "echo CK7_\$(seq 40 | xargs -P 20 -I{} curl $proxy -w '%{http_code}\n' https://example.com/ | sort | uniq -c | tr -s ' \n' '_')"
     "curl $proxy -w 'CK6_%{http_code}\n' https://example.com/"
     'for i in $(seq 60); do pgrep -u contestant -x xfce4-session >/dev/null && break; sleep 2; done; echo CK8_$(pgrep -u contestant -x xfce4-session | wc -l)_session'
-    'pkcheck --action-id org.freedesktop.NetworkManager.settings.modify.system --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK9_pkcheck_$?'
-    'mv /etc/polkit-1/rules.d/50-ck-contestant.rules /root/; sleep 3; pkcheck --action-id org.freedesktop.NetworkManager.settings.modify.system --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK10_control_$?; mv /root/50-ck-contestant.rules /etc/polkit-1/rules.d/; sleep 3'
+    'pkcheck --action-id org.freedesktop.NetworkManager.enable-disable-wifi --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK9_wifi_switch_$?'
+    'test -x /usr/bin/nm-applet && test -f /etc/xdg/autostart/nm-applet.desktop && grep -q systray /etc/xdg/xfce4/panel/default.xml && echo CK10_network_menu_ok'
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
     'su -s /bin/sh contestant -c "sudo -n true" >/dev/null 2>&1; echo CK12_sudo_$?'
@@ -144,6 +144,7 @@ run_checks() {
     'runuser -u contestant -- systemctl start ck-refresh-connection.service >/dev/null 2>&1; echo CK32_refreshunit_$?'
     'runuser -u contestant -- systemctl --no-ask-password restart squid.service >/dev/null 2>&1; echo CK33_squidrestart_$?'
     'runuser -u contestant -- ck-refresh-connection --no-gui; echo CK34_refresh_$?'
+    'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK44_power_$(p org.freedesktop.login1.power-off)_reboot_$(p org.freedesktop.login1.reboot)_firmware_$(p org.freedesktop.login1.set-reboot)_suspend_$(p org.freedesktop.login1.suspend)'
     ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
     'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
@@ -186,12 +187,10 @@ run_checks() {
   expect 'CK6_200' 'the allowed site works again once ck-capture is back'
   expect 'CK7__40_200_' '40 parallel requests (20 at a time) to the allowed site all succeed'
   expect 'CK8_1_session' 'the contestant is logged in on the desktop by itself (autologin)'
-  # The rule is what denies: with the rule moved away the same check must not say "not authorized" (exit 1).
-  expect 'CK9_pkcheck_1' 'polkit says the contestant may not change the network (rule in place)'
-  if grep -qE 'CK10_control_[02]' "$log"; then echo "ok   without the rule polkit would not refuse it (the test is not passing by accident)"; else
-    echo "FAIL control: polkit refused even without the rule" >&2
-    failed=1
-  fi
+  # Contestants need Wi-Fi (decision of 2026-11-20): the standard network menu is in the panel and
+  # polkit lets the contestant's session switch Wi-Fi on and off.
+  expect 'CK9_wifi_switch_0' 'polkit lets the contestant switch Wi-Fi on and off'
+  expect 'CK10_network_menu_ok' 'the network menu is installed, starts with the desktop and the panel has a notification area'
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
   expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
   expect 'CK14_ca_1_in_firefox' 'Firefox trusts this stick'"'"'s own Squid CA (policy installed it)'
@@ -225,6 +224,7 @@ run_checks() {
   expect 'CK32_refreshunit_0' 'the contestant can start the Refresh Connection unit without sudo (polkit rule)'
   expect 'CK33_squidrestart_1' 'the contestant still cannot restart Squid itself'
   expect 'CK34_refresh_0' 'Refresh Connection restarts Squid and every allowed site answers through it'
+  expect 'CK44_power_0_reboot_0_firmware_1_suspend_1' 'the contestant can shut down and restart, but not reboot into firmware setup or suspend'
   expect 'ck-refresh ok example.com' 'Refresh Connection reports the allowed site as reachable'
   expect 'CK35_resetlogin_0' 'polkit lets the reset login start the reset unit'
   if grep -qE 'CK36_contestantreset_[1-3]' "$log"; then echo "ok   polkit does not let the contestant start the reset unit"; else

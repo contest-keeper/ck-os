@@ -1,4 +1,5 @@
-# Keeper OS: the contestant cannot change the panel or the session, and cannot shut the machine down.
+# Keeper OS: the contestant cannot change the panel or the session. Shut down and restart are allowed:
+# the Hub shows a stick that goes offline or boots again.
 [xfce4-panel]
 CustomizePanel=NONE
 
@@ -7,4 +8,3 @@ CustomizeChooser=NONE
 CustomizeLogout=NONE
 CustomizeSplash=NONE
 SaveSession=NONE
-Shutdown=NONE
