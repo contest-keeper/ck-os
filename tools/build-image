@@ -2,7 +2,7 @@
 # Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
 # No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--config-public-keys FILE]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -24,6 +24,8 @@ PROFILE=ubuntu
 SIZE=8G
 DEBUG_LOGIN=0
 COMPRESS=1
+CONFIG_PUBLIC_KEYS=""
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 AGENT=$REPO/dist/ck-agent
 VERSION=$(cat "$(dirname "$0")/../version.txt" 2>/dev/null || echo 0.0.0)
@@ -46,6 +48,10 @@ while [[ $# -gt 0 ]]; do
       COMPRESS=0
       shift
       ;; # skip the .zst and its checksum (test builds)
+    --config-public-keys)
+      CONFIG_PUBLIC_KEYS=${2:?--config-public-keys requires a file of public keys}
+      shift 2
+      ;; # the image then only accepts stick settings the Hub signed with one of these keys
     --profile)
       PROFILE=${2:?--profile requires ubuntu or debian}
       case $PROFILE in
@@ -234,6 +240,21 @@ printf 'keeper-os %s\n' "$VERSION" >"$MNT/etc/ck/image-version"
 # Forge reads this from the raw image before offering first-boot enrolment.
 if [[ -r $AGENT ]] && grep -aFq 'Supports Keeper OS enrolment schema 3.' "$AGENT"; then
   printf '3\n' >"$MNT/etc/ck/enrolment-schema"
+fi
+# An image that carries public keys only accepts stick settings the Hub signed: the agent checks the
+# signature at every boot, and Forge reads this file from the raw image to know it has to get the
+# settings signed. An agent that does not make the check must not be given keys, or the file would
+# promise a check nobody makes.
+if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
+  if ! grep -qvE '^[[:space:]]*(#|$)' "$CONFIG_PUBLIC_KEYS"; then
+    echo "ERROR: $CONFIG_PUBLIC_KEYS has no public key" >&2
+    exit 1
+  fi
+  if ! grep -aFq 'Checks settings signatures (signed settings 1).' "$AGENT"; then
+    echo "ERROR: the agent does not check settings signatures, so the image must not carry keys" >&2
+    exit 1
+  fi
+  install -m 0644 "$CONFIG_PUBLIC_KEYS" "$MNT/etc/ck/config-public-keys"
 fi
 # xfconf merges a settings channel from every config directory, so the stock shortcut file that xfce4-settings
 # keeps in /etc/xdg/xfce4 (it has a Ctrl+Alt+T terminal shortcut) must be replaced by the locked one as well.

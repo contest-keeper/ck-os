@@ -6,7 +6,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ck_agent_config::{Error, Root, apply_basics, apply_branding, load};
+use ck_agent_config::{
+    Error, Root, Trust, apply_basics, apply_branding, load_for_boot, write_trust,
+};
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
 
@@ -25,7 +27,7 @@ const QUEUE_FOLDER: &str = "var/lib/ck/queue";
     name = "ck-agent",
     version,
     about = "The Contest Keeper agent on the stick",
-    long_about = "The Contest Keeper agent on the stick. Supports Keeper OS enrolment schema 3."
+    long_about = "The Contest Keeper agent on the stick. Supports Keeper OS enrolment schema 3. Checks settings signatures (signed settings 1)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -133,10 +135,17 @@ fn main() -> ExitCode {
 }
 
 fn apply_config(root: &Root) -> ExitCode {
-    let loaded = match load(root) {
-        Ok(loaded) => loaded,
+    let booted = match load_for_boot(root) {
+        Ok(booted) => booted,
         Err(Error::SettingsMissing(path)) => {
             tracing::error!("no settings at {path}; keeping the image defaults");
+            return ExitCode::from(EXIT_NO_SETTINGS);
+        }
+        Err(Error::SettingsRejected { sha256, reason }) => {
+            tracing::error!(
+                "the settings file was refused ({reason}) and no settings were verified before it; keeping the image defaults"
+            );
+            record_trust(root, &Trust::Rejected(sha256));
             return ExitCode::from(EXIT_NO_SETTINGS);
         }
         Err(error) => {
@@ -144,6 +153,8 @@ fn apply_config(root: &Root) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    record_trust(root, &booted.trust);
+    let loaded = booted.loaded;
     // The stick id is not secret; the token and the file content are never logged.
     tracing::info!(stick = %loaded.config.stick_id, sha256 = %loaded.sha256, "settings read");
 
@@ -163,6 +174,14 @@ fn apply_config(root: &Root) -> ExitCode {
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
+}
+
+/// Keeps what the stick made of its settings file, which every heartbeat reports. Failing to keep it
+/// never stops the settings from being applied.
+fn record_trust(root: &Root, trust: &Trust) {
+    if let Err(error) = write_trust(root, trust) {
+        tracing::error!("cannot keep what the settings check found: {error}");
+    }
 }
 
 /// Gives `ckadmin` the password the admin chose. Without a hash the account stays locked. A

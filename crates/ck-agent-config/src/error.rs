@@ -9,6 +9,10 @@ pub enum Error {
     SettingsMissing(String),
     #[error("the settings file is not valid: {0}")]
     SettingsUnreadable(String),
+    /// An image that carries public keys refused the settings file: it is not signed, the signature
+    /// does not match, or it is made for another stick. `sha256` is the hash of the refused file.
+    #[error("the settings file was refused: {reason}")]
+    SettingsRejected { sha256: String, reason: String },
     #[error("the settings file is larger than {0} bytes")]
     SettingsTooLarge(u64),
     #[error("the settings have problems: {}", join(.0))]
