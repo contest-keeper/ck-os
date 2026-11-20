@@ -377,6 +377,51 @@ fn recordings_can_start_after_the_contest_and_never_follow_a_redirect() {
 }
 
 #[test]
+fn the_heartbeat_says_what_the_stick_made_of_its_settings_file() {
+    use ck_protocol::ConfigTrust;
+
+    let hub = fake_hub(vec![]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let mut uplink = Uplink::load(dir.path()).expect("load");
+    // A stick whose agent never kept it (an older one) says nothing.
+    assert_eq!(
+        uplink
+            .next_heartbeat(time(), RecorderState::Recording)
+            .config_trust,
+        None
+    );
+    let marker = dir.path().join("etc/ck/config.trust");
+    for (text, expected) in [
+        (
+            "verified
+",
+            Some(ConfigTrust::Verified),
+        ),
+        (
+            "rejected 0123abcd
+",
+            Some(ConfigTrust::Rejected),
+        ),
+        (
+            "unchecked
+",
+            Some(ConfigTrust::Unchecked),
+        ),
+        (
+            "something else
+",
+            None,
+        ),
+        ("", None),
+    ] {
+        fs::write(&marker, text).expect("marker");
+        let sent = uplink.next_heartbeat(time(), RecorderState::Recording);
+        assert_eq!(sent.config_trust, expected, "{text:?}");
+    }
+}
+
+#[test]
 fn sends_a_signed_heartbeat_built_from_the_machine_files() {
     let hub = fake_hub(vec![200, 200]);
     let dir = TempDir::new().expect("temp dir");

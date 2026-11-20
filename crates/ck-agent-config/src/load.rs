@@ -5,9 +5,10 @@ use ck_protocol::{CONFIG_FILE, CONFIG_MOUNT_POINT, ESP_CONFIG_FILE, StickConfig}
 
 use crate::error::Error;
 use crate::root::Root;
+use crate::trust::{self, Keys};
 
 /// A real settings file is a few kilobytes; the partition is not trusted to say how big it is.
-const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
 /// The old place of the settings, on the EFI partition. Read only when `CKCONFIG` has none, so
 /// sticks made before the config partition existed keep working (one release).
@@ -40,6 +41,9 @@ pub struct Loaded {
     /// The file exactly as read, kept so its hash and the root-only copy match it byte for byte.
     pub raw: Vec<u8>,
     pub sha256: String,
+    /// Whether the settings were checked against the Hub's signature. An image that carries no key
+    /// takes its settings as they are.
+    pub verified: bool,
 }
 
 /// Read the legacy ESP only when the CKCONFIG partition or its settings file is missing.
@@ -68,6 +72,10 @@ impl std::fmt::Debug for Loaded {
 /// treat differently from a bad file. A `CKCONFIG` file that exists but is bad is an error: the
 /// old copy is not used instead.
 pub fn load(root: &Root) -> Result<Loaded, Error> {
+    let keys = trust::load_keys(root)?;
+    // An image that checks signatures never falls back to the unsigned legacy copy on the EFI
+    // partition: deleting the file on CKCONFIG would otherwise let an unsigned one take its place.
+    let may_fall_back = matches!(keys, Keys::Unchecked);
     let result = read_with_esp_fallback(
         |source| {
             let file_name = match source {
@@ -75,9 +83,9 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
                 Source::Esp => ESP_CONFIG_FILE,
             };
             let path = format!("{}/{file_name}", source.folder());
-            load_from(root, source, &path)
+            load_from(root, source, &path, &keys)
         },
-        |error| matches!(error, Error::SettingsMissing(_)),
+        |error| may_fall_back && matches!(error, Error::SettingsMissing(_)),
     );
     match result {
         Err(Error::SettingsMissing(_)) => Err(Error::SettingsMissing(format!(
@@ -87,7 +95,7 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
     }
 }
 
-fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {
+fn load_from(root: &Root, source: Source, path: &str, keys: &Keys) -> Result<Loaded, Error> {
     let file = match File::open(root.path(path)) {
         Ok(file) => file,
         Err(e) if e.kind() == ErrorKind::NotFound => {
@@ -101,6 +109,11 @@ fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {
         .map_err(|e| Error::io(format!("reading {path}"), e))?;
     if raw.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(Error::SettingsTooLarge(MAX_SETTINGS_BYTES));
+    }
+    // Before anything is read out of the file: a refused file reaches nothing.
+    if let Keys::Trusted(list) = keys {
+        trust::verify(root, source, &raw, list)?;
+        trust::same_stick(root, &raw)?;
     }
     let config = if source == Source::CkConfig {
         crate::enrolment::resolve(root, &raw, true)?.0
@@ -117,5 +130,6 @@ fn load_from(root: &Root, source: Source, path: &str) -> Result<Loaded, Error> {
         config,
         raw,
         sha256,
+        verified: matches!(keys, Keys::Trusted(_)),
     })
 }

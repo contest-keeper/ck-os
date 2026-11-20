@@ -10,9 +10,9 @@ repository = "https://github.com/contest-keeper/ck-os"
 rust-version = "1.87"
 
 [workspace.dependencies]
-ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "293131bab0de9c55d508d04f446b3803420f1ec0", version = "0.1.0" }
-ck-image = { git = "https://github.com/contest-keeper/ck-protocol", rev = "293131bab0de9c55d508d04f446b3803420f1ec0", version = "0.1.0" }
-ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "293131bab0de9c55d508d04f446b3803420f1ec0", version = "0.1.0" }
+ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "f4796fe7f0546076f1013fb842f85af30dbfb05d", version = "0.1.0" }
+ck-image = { git = "https://github.com/contest-keeper/ck-protocol", rev = "f4796fe7f0546076f1013fb842f85af30dbfb05d", version = "0.1.0" }
+ck-protocol = { git = "https://github.com/contest-keeper/ck-protocol", rev = "f4796fe7f0546076f1013fb842f85af30dbfb05d", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

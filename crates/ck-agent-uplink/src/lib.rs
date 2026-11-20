@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use ck_agent_config::{PendingEnrolment, Root, read_applied_config};
 use ck_protocol::{
-    HEARTBEAT_PATH, Heartbeat, HeartbeatReply, RecorderState, RecorderStatus, RecordingMode,
-    SIGNATURE_HEADER, STICK_HEADER, StickConfig, Timestamp,
+    ConfigTrust, HEARTBEAT_PATH, Heartbeat, HeartbeatReply, RecorderState, RecorderStatus,
+    RecordingMode, SIGNATURE_HEADER, STICK_HEADER, StickConfig, Timestamp,
 };
 
 /// The root-only copy of the settings that `ck-agent apply-config` writes at boot.
@@ -152,6 +152,7 @@ impl Uplink {
                 mode: settings.recording.mode,
                 state: recorder,
             },
+            config_trust: config_trust(&self.root),
         }
     }
 
@@ -271,6 +272,18 @@ pub fn recorder_state(root: &Path, mode: RecordingMode, service_active: bool) ->
         Some("recording") => RecorderState::Recording,
         Some("lowdisk") => RecorderState::LowDisk,
         _ => RecorderState::Waiting,
+    }
+}
+
+/// What the stick made of its settings file at boot, as `ck-agent apply-config` kept it. A stick whose
+/// agent never kept it says nothing.
+fn config_trust(root: &Path) -> Option<ConfigTrust> {
+    let text = read_trimmed(root, "etc/ck/config.trust")?;
+    match text.split_whitespace().next()? {
+        "verified" => Some(ConfigTrust::Verified),
+        "rejected" => Some(ConfigTrust::Rejected),
+        "unchecked" => Some(ConfigTrust::Unchecked),
+        _ => None,
     }
 }
 

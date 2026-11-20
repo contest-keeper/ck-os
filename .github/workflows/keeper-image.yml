@@ -85,6 +85,18 @@ jobs:
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
+      # The tests above write settings that nobody signed, so they run on the image without keys. When the
+      # public keys of the Hub are set, the image that is published is the same build with the key list in
+      # it, and the agent's own tests cover the signature check.
+      - name: Build again with the keys that sign stick settings
+        if: vars.CK_CONFIG_PUBLIC_KEYS != ''
+        env:
+          CK_CONFIG_PUBLIC_KEYS: ${{ vars.CK_CONFIG_PUBLIC_KEYS }}
+        run: |
+          printf '%s\n' "$CK_CONFIG_PUBLIC_KEYS" >"$RUNNER_TEMP/config-public-keys"
+          sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+            --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
+            --config-public-keys "$RUNNER_TEMP/config-public-keys"
       - name: Verify the packaged files and stage the Hub manifest
         run: |
           python3 tools/publish-image "$RUNNER_TEMP/keeper-image" "$KEEPER_IMAGE_VERSION" \
