@@ -30,7 +30,10 @@ with Path(os.environ["FAKE_CALLS"]).open("a") as calls:
 state_file = Path(os.environ["FAKE_STATE"])
 
 
+CLOUD_BOOT = os.environ.get("CLOUD_BOOT")
 FSTAB = os.environ.get("FAKE_FSTAB", "UUID=example /boot/efi vfat defaults 0 1\n")
+if CLOUD_BOOT:
+    FSTAB += "LABEL=BOOT /boot ext4 defaults 0 2\n"
 SQUID = "http_port 3128\nacl allowed_domains dstdomain \"/etc/squid/acl_allowed_domains.txt\"\n"
 # The top of a real grub.cfg: the line that reads custom.cfg, two entries, and a submenu whose
 # indented entry is the recovery mode.
@@ -39,7 +42,8 @@ GRUB = (
     "menuentry 'Ubuntu' --class ubuntu {\n\trecordfail\n}\n"
     "submenu 'Advanced options for Ubuntu' {\n"
     "\tmenuentry 'Ubuntu, with Linux (recovery mode)' --class os {\n\t\trecordfail\n\t}\n}\n"
-    "if [ -f  ${config_directory}/custom.cfg ]; then\n  source ${config_directory}/custom.cfg\nfi\n"
+    "if [ -f  ${config_directory}/custom.cfg ]; then\n  source ${config_directory}/custom.cfg\n"
+    'elif [ -z "${config_directory}" -a -f  $prefix/custom.cfg ]; then\n  source $prefix/custom.cfg\nfi\n'
     "menuentry 'Contest system (safe graphics)' {\n  linux /boot/vmlinuz nomodeset\n}\n"
 )
 if os.environ.get("NO_GRUB"):
@@ -51,6 +55,12 @@ GSHADOW = "root:*::\nlpadmin:!::icpcadmin,contestant\ncontestant:!::\n"
 if os.environ.get("NO_GROUP"):
     GROUP = ""
 ORIGINALS = {"/boot/grub/grub.cfg": GRUB, "/etc/group": GROUP, "/etc/gshadow": GSHADOW}
+if CLOUD_BOOT:
+    ORIGINALS.pop("/boot/grub/grub.cfg")
+    ORIGINALS["/grub/grub.cfg"] = GRUB.split("menuentry 'Contest system", 1)[0]
+    if os.environ.get("UNRESTRICTED_RECOVERY"):
+        ORIGINALS["/grub/grub.cfg"] = ORIGINALS["/grub/grub.cfg"].replace(
+            "\tmenuentry '", "\tmenuentry --unrestricted '", 1)
 
 
 def names(variable):
@@ -59,11 +69,28 @@ def names(variable):
 
 if tool == "sfdisk":
     if not os.environ.get("NO_LINUX_PARTITION"):
-        print(os.environ.get("PARTITION_TABLE", "image: start= 2048, size= 4096, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4"))
+        table = "image1: start= 2048, size= 4096, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+        if CLOUD_BOOT:
+            table += "\nimage15: start= 8192, size= 1024, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=x"
+            table += "\nimage16: start= 10240, size= 1024, type=BC13C2FF-59E6-4262-A352-B275FD6F7172, uuid=y"
+            table = "label: gpt\nsector-size: 512\n" + table
+        print(os.environ.get("PARTITION_TABLE", table))
 elif tool == "e2fsck":
-    if os.environ.get("FAIL_FSCK"):
+    if os.environ.get("FAIL_FSCK") or (os.environ.get("FAIL_BOOT_FSCK") and args[-1].endswith("?offset=5242880")):
         print("Simulated filesystem check failure")
         sys.exit(4)
+elif tool == "mdir":
+    if args[-1] == "::/EFI/BOOT":
+        print("::/EFI/BOOT/BOOTX64.EFI")
+        if os.environ.get("ALTERNATE_EFI_CONFIG"):
+            print("::/EFI/BOOT/GRUB.CFG")
+    else:
+        print("::/EFI/ubuntu/grub.cfg")
+elif tool == "mtype":
+    uuid = "b4f0deba-ce7d-45dc-9999-0427f2720320"
+    if os.environ.get("BAD_BOOT_FORWARDER"):
+        uuid = "00000000-0000-0000-0000-000000000000"
+    print(f"search.fs_uuid {uuid} root \nset prefix=($root)'/grub'\nconfigfile $prefix/grub.cfg")
 elif tool == "debugfs":
     state = json.loads(state_file.read_text())
     for table in ("files", "links", "modes", "owners"):
@@ -101,7 +128,13 @@ elif tool == "debugfs":
         state_file.write_text(json.dumps(state))
     else:
         parts = shlex.split(args[args.index("-R") + 1])
-        if parts[0] == "stat":
+        if parts[0] == "stats":
+            if args[-1].endswith("?offset=5242880"):
+                print("Filesystem volume name:   BOOT")
+                print("Filesystem UUID:          b4f0deba-ce7d-45dc-9999-0427f2720320")
+            print("Block count:              " + ("1024" if os.environ.get("OVERSIZED_FS") else "128"))
+            print("Block size:               4096")
+        elif parts[0] == "stat":
             path = parts[1]
             if path in state["links"]:
                 print("Inode: 43   Type: symlink    Mode:  0777   Flags: 0x0")
@@ -151,6 +184,7 @@ class ImagePatchTests(unittest.TestCase):
         self.patch.mkdir()
         shutil.copy2(PATCH / "apply-to-image.sh", self.patch)
         shutil.copytree(PATCH / "lib", self.patch / "lib")
+        shutil.copytree(PATCH.parent / "keeper" / "rootfs", self.patch / "keeper-rootfs")
         self.payload = self.patch / "rootfs"
         self.write_payload("etc/ck/config.conf", b"example=value\r\n")
         self.write_payload("etc/ck/image-version", b"test-image\n")
@@ -164,7 +198,7 @@ class ImagePatchTests(unittest.TestCase):
         (self.patch / "remove-files.txt").write_text("# Remove a leftover\n/old-file\n")
         tools = self.directory / "tools"
         tools.mkdir()
-        for name in ("sfdisk", "debugfs", "e2fsck"):
+        for name in ("sfdisk", "debugfs", "e2fsck", "mtype", "mdir"):
             tool = tools / name
             tool.write_text(FAKE_TOOL)
             tool.chmod(0o755)
@@ -210,6 +244,48 @@ class ImagePatchTests(unittest.TestCase):
         commands = self.commands_file.read_text()
         self.assertIn("symlink /etc/systemd/system/old.service /dev/null\n", commands)
         self.assertIn("rm /old-file\n", commands)
+
+    def test_cloud_boot_patches_the_effective_filesystem(self):
+        self.write_payload("boot/grub/custom.cfg", b"fixture lock\n")
+        result = self.run_patch(CLOUD_BOOT="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        state = json.loads(self.state_file.read_text())
+        self.assertEqual(state["files"]["/grub/custom.cfg"], "fixture lock\n")
+        self.assertEqual(state["modes"]["/grub/custom.cfg"], "0100600")
+        grub = state["files"]["/grub/grub.cfg"]
+        self.assertIn("menuentry --unrestricted 'Ubuntu'", grub)
+        self.assertIn("\tmenuentry 'Ubuntu, with Linux (recovery mode)'", grub)
+        self.assertNotIn("/boot/grub/custom.cfg", state["files"])
+        squid = state["files"]["/etc/squid/squid.conf"]
+        self.assertIn('acl allowed_domains dstdomain "/etc/squid/acl_allowed_domains.txt"', squid)
+        self.assertIn("http_access deny all", squid)
+        self.assertIn("Requires=ck-squid-ca.service", state["files"]["/etc/systemd/system/squid.service.d/10-ck.conf"])
+        self.assertEqual(state["modes"]["/usr/local/sbin/ck-squid-ca"], "0100755")
+        policies = json.loads(state["files"]["/usr/lib/firefox/distribution/policies.json"])["policies"]
+        self.assertTrue(policies["Proxy"]["Locked"])
+        self.assertEqual(policies["Certificates"]["Install"], ["/etc/ck/squid-ca/ca.crt"])
+        calls = [json.loads(line) for line in self.calls_file.read_text().splitlines()]
+        writes = [(Path(call[call.index("-f") + 1]).name, call[-1])
+                  for call in calls if call[0] == "debugfs" and "-w" in call]
+        self.assertEqual(writes, [("boot-commands", f"{self.image}?offset=5242880"),
+                                  ("commands", f"{self.image}?offset=1048576")])
+
+    def test_cloud_boot_preflight_blocks_all_writes(self):
+        self.write_payload("boot/grub/custom.cfg", b"fixture lock\n")
+        for failure, message in (
+            ("BAD_BOOT_FORWARDER", "EFI GRUB forwarder does not identify"),
+            ("ALTERNATE_EFI_CONFIG", "expected the stock Ubuntu EFI loader"),
+            ("UNRESTRICTED_RECOVERY", "unsupported Ubuntu BOOT GRUB menu"),
+            ("OVERSIZED_FS", "filesystem does not match"),
+            ("FAIL_BOOT_FSCK", "Simulated filesystem check failure"),
+        ):
+            with self.subTest(failure=failure):
+                self.calls_file.write_text("")
+                result = self.run_patch(CLOUD_BOOT="1", **{failure: "1"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in self.calls_file.read_text().splitlines()]
+                self.assertFalse(any(call[0] == "debugfs" and "-w" in call for call in calls))
 
     def test_enables_each_service_and_fails_when_its_link_is_missing(self):
         self.assertEqual(self.run_patch().returncode, 0)

@@ -118,7 +118,10 @@ COMMANDS
 payload_file_mode() {
   local image_path=$1
   case "$image_path" in
-    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome | /icpc/scripts/set_wallpaper.sh | /icpc/scripts/deleteUser.sh)
+    /grub/grub.cfg | /grub/custom.cfg)
+      printf '0100600\n'
+      ;;
+    /usr/local/bin/ck-recorder | /usr/local/bin/ck-agent | /usr/local/bin/ck-welcome | /usr/local/sbin/ck-squid-ca | /icpc/scripts/set_wallpaper.sh | /icpc/scripts/deleteUser.sh)
       printf '0100755\n'
       ;;
     *)
