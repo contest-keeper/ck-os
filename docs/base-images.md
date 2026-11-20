@@ -126,3 +126,23 @@ control), group membership and sudo, Firefox (starts, trusts the stick's CA, Moz
 languages, the three IDEs, and the Java store. It needs internet. `CK_SMOKE_LOG` keeps the serial log and
 `CK_SMOKE_EXTRA` runs one more command, for looking into a failure.
 
+## Debian profile
+
+The local Debian Trixie profile uses the same partition layout and Keeper services as the Ubuntu
+image. It uses Debian's signed archives, kernel, shim and GRUB, and installs the XFCE packages
+directly. Install the Debian archive keyring on the build host, or set `CK_DEBIAN_KEYRING` to the
+verified keyring file before building.
+
+```bash
+sudo tools/build-image --profile debian --out /path/to/debian-output --agent /path/to/ck-agent --no-compress
+tools/qemu-smoke /path/to/debian-output/keeper-os-0.1.0-debian.img all
+```
+
+The Debian snapshot provides separate Debian and Debian Security archives. `CK_MIRROR` and
+`CK_SECURITY_MIRROR` can override them independently for local testing. Use the dated defaults
+for reproducibility. The existing build command and hosted publishing workflow default to Ubuntu.
+
+Verified under WSL2/KVM on 2026-11-20 with the Debian snapshot `20261119T000000Z`. The Debian image
+reached the login prompt in UEFI, Secure Boot and legacy BIOS. A separate guest check reached
+the contestant's Xfce desktop and verified the core Keeper services and read-only CKCONFIG mount.
+
