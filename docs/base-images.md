@@ -145,4 +145,3 @@ for reproducibility. The existing build command and hosted publishing workflow d
 Verified under WSL2/KVM on 2026-11-20 with the Debian snapshot `20261119T000000Z`. The Debian image
 reached the login prompt in UEFI, Secure Boot and legacy BIOS. A separate guest check reached
 the contestant's Xfce desktop and verified the core Keeper services and read-only CKCONFIG mount.
-
