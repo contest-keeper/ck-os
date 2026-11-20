@@ -37,7 +37,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.sha }}
           persist-credentials: false
@@ -51,21 +51,21 @@ jobs:
             printf '%s\n' "$version" > version.txt
           fi
           echo "KEEPER_IMAGE_VERSION=$version" >> "$GITHUB_ENV"
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.17.0
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-zigbuild
       - run: rustup toolchain install --profile minimal
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: ck-os-agent
       - name: Build the static agent
         run: |
           cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent
           file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-about
       - name: Check the agent's third-party licences
@@ -91,7 +91,7 @@ jobs:
             > "$RUNNER_TEMP/keeper-image/images.json"
       - name: Sign in to the private downloads account
         if: vars.CK_IMAGE_PUBLISH_ENABLED == 'true'
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.CK_IMAGE_PUBLISH_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

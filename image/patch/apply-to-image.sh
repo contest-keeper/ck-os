@@ -37,6 +37,8 @@ source "$patch_directory/lib/cloud-boot.sh"
 root_sector=$(find_linux_partition "$image_file")
 filesystem="$image_file?offset=$((root_sector * 512))"
 echo "Root filesystem found at sector $root_sector"
+# A failure here must stop the script: set -e aborts on the failed command substitution.
+# Do not add "|| true" to this line.
 boot_filesystem=$(resolve_cloud_boot "$image_file" "$filesystem" "$root_sector")
 
 # 2. Prepare a temporary copy of the files and an image command list.
