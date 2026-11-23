@@ -23,6 +23,7 @@ OUT=build
 PROFILE=ubuntu
 SIZE=8G
 DEBUG_LOGIN=0
+SERIAL_CONSOLE=0
 COMPRESS=1
 CONFIG_PUBLIC_KEYS=""
 
@@ -64,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
 
+    --serial-console)
+      SERIAL_CONSOLE=1
+      shift
+      ;; # console on ttyS0 and a GRUB menu with a timeout, for the QEMU smoke test only
     --debug-login)
       DEBUG_LOGIN=1
       shift
@@ -303,16 +308,30 @@ ExecStart=/usr/local/sbin/ck-grow-root
 WantedBy=multi-user.target
 EOF
 
-# Serial console as well as the screen, so the QEMU smoke test can see the login prompt.
+# Kernel lockdown (integrity) also when Secure Boot is off, as on BIOS boots: no /dev/mem, no unsigned modules,
+# no kexec of unsigned kernels. A published image has no serial console and no GRUB menu (nothing to pick or edit
+# at boot). Only the --serial-console build used by the QEMU smoke test has them, so the test can see the login
+# prompt.
 mkdir -p "$MNT/etc/default/grub.d"
-cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
-GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200"
+if [[ $SERIAL_CONSOLE -eq 1 ]]; then
+  cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 lockdown=integrity"
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TIMEOUT=1
 GRUB_DISTRIBUTOR="Keeper OS"
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
 EOF
+else
+  cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
+GRUB_CMDLINE_LINUX="lockdown=integrity"
+GRUB_CMDLINE_LINUX_DEFAULT=""
+GRUB_TIMEOUT=0
+GRUB_TIMEOUT_STYLE=hidden
+GRUB_DISTRIBUTOR="Keeper OS"
+GRUB_TERMINAL="console"
+EOF
+fi
 
 # Accounts. The contestant logs in by itself (lightdm drop-in) and has no password. The admin account has
 # sudo only with a password, and its password is locked here: the per-contest hash is set by Forge through
@@ -448,6 +467,14 @@ if grep -qE '^(gnome-terminal|xfce4-terminal) ' "$OUT/keeper-os-$VERSION.package
   ! grep -q '^xterm ' "$OUT/keeper-os-$VERSION.packages.txt" ||
   ! grep -q '^xfce4-session ' "$OUT/keeper-os-$VERSION.packages.txt" || ! grep -q '^lightdm ' "$OUT/keeper-os-$VERSION.packages.txt"; then
   echo "ERROR: desktop lockdown: a terminal program is installed besides xterm, or the desktop itself is gone" >&2
+  exit 1
+fi
+if ! grep -q 'lockdown=integrity' "$MNT/boot/grub/grub.cfg"; then
+  echo "ERROR: the kernel command line does not set lockdown=integrity" >&2
+  exit 1
+fi
+if [[ $SERIAL_CONSOLE -eq 0 ]] && grep -q 'ttyS0' "$MNT/boot/grub/grub.cfg"; then
+  echo "ERROR: a build without --serial-console still has a serial console in GRUB" >&2
   exit 1
 fi
 if grep -iE '^(menuentry|submenu) ' "$MNT/boot/grub/grub.cfg" | grep -qi ubuntu; then
