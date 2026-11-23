@@ -33,7 +33,7 @@ Needs root, a Linux kernel with loop devices and: `mmdebstrap`, `sfdisk`, `loset
 `zstd`, `tar`. Run it in WSL2 (as root, for example `wsl -u root`) or on a Linux CI runner:
 
 ```
-sudo tools/build-image --out build [--size 8G] [--debug-login]
+sudo tools/build-image --out build [--size 8G] [--debug-login] [--serial-console]
 ```
 
 Outputs in `--out`: `keeper-os-<version>.img`, `.img.zst` with `.sha256`, `keeper-os-<version>.packages.txt`
@@ -71,7 +71,9 @@ Not covered: a different `CK_SNAPSHOT`, a different host `mmdebstrap` or `tar` v
 The image boots in three modes: UEFI, UEFI with Secure Boot (Canonical's signed shim and GRUB, Canonical-signed
 kernel) and legacy BIOS (GRUB in the BIOS boot partition). `tools/qemu-smoke IMAGE [uefi|secureboot|bios|all]`
 boots a copy of the image in QEMU and waits for the login prompt on the serial console; the Secure Boot mode also
-requires the kernel line "Secure boot enabled". It exits non-zero if any mode fails. Build with `--debug-login`
+requires the kernel line "Secure boot enabled". It exits non-zero if any mode fails. The login prompt is read from the
+serial console, so build the image with `--serial-console` (a published image has no serial console and a hidden GRUB
+menu; every image boots with `lockdown=integrity`). Build with `--debug-login`
 (empty root password) for these tests only; never ship that image.
 
 Acceleration is KVM on Linux and CI, WHPX on Windows (Git Bash with a Windows QEMU), else slow emulation

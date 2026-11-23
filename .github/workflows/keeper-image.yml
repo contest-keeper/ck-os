@@ -83,7 +83,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/keeper-image"
           sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys
+            --config-public-keys tools/ci-test-config-keys --serial-console
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
       # The smoke build above carries a CI test key, so it can never be published. A build that is
