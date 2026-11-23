@@ -36,7 +36,7 @@ Status: plan only, nothing implemented. Written 2026-11-17.
 ### 0. Decisions and spikes (no code merged) — DONE 2026-11-18
 Decision: **mmdebstrap noble + `xubuntu-core`** (what `tools/build-image` does), not the Desktop ISO: lighter,
 pinnable to a snapshot mirror, reproducible. Owner answers (XFCE, Firefox only, free IDEs, five languages, no
-FAT share, no printing, no blanket admin sudo) are in `icpc-image-checklist.md`. Threat list for the
+FAT share, no printing, no blanket admin sudo) were in `icpc-image-checklist.md` (removed; see git history). Threat list for the
 contestant desktop: `contestant-desktop-threats.md`. The original notes follow.
 - Base: Ubuntu 24.04 cloud/server image (pinned URL + sha256) with desktop installed by the build, vs
   the Desktop ISO. Recommended: server/cloud base + `ubuntu-desktop-minimal` (or lighter DE) +
