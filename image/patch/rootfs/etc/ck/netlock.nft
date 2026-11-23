@@ -2,11 +2,12 @@
 # Keeper OS network lock. Loaded by ck-netlock.service before the network comes up and never
 # changed by the settings, so a stick with missing or broken settings is locked too.
 #
-# Only these users may send anything to the network: root (NetworkManager, DHCP, ck-agent and its
-# Hub heartbeats), Squid (the allowlist is enforced there) and the system clock. The name
+# Only the services in cknet.slice may send anything to the network: NetworkManager (and DHCP), the agent's
+# Hub heartbeats and recording uploads, Squid (the allowlist is enforced there) and the system clock. Other root
+# programs, such as a root shell, have no network. The slice is a cgroup that stays up while this lock is loaded. The name
 # resolver is not on the list: /etc/resolv.conf names the router's DNS server directly, so Squid
 # looks names up itself and nobody can carry data out in DNS names through systemd-resolved. Everyone else, including the contestant, can only reach this machine
-# itself, so the web goes through Squid or nowhere. If an image runs Squid as another user, change it here.
+# itself, so the web goes through Squid or nowhere. A service that needs the network is put in the slice with Slice=cknet.slice.
 
 # Declared first so that deleting it works whether or not it exists.
 table inet ck_netlock
@@ -17,7 +18,7 @@ table inet ck_netlock {
 		type filter hook output priority 0; policy drop;
 
 		ct state established,related accept
-		meta skuid { root, proxy, systemd-timesync } accept
+		socket cgroupv2 level 1 "cknet.slice" accept
 		# Everyone else may only talk to Squid, not to the local name resolver.
 		oifname "lo" tcp dport 3128 accept
 	}

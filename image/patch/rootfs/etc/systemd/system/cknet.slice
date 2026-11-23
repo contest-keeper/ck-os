@@ -1,0 +1,8 @@
+[Unit]
+Description=Keeper OS: the services that may use the network (not named ck-net: a dash would nest it under ck.slice)
+# netlock.nft lets this slice (and nothing else) send to the network. The slice stays up while the lock is
+# loaded, so the rule keeps matching when a service in it is restarted.
+DefaultDependencies=no
+Before=slices.target
+
+[Slice]
