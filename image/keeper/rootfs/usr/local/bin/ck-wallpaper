@@ -1,8 +1,8 @@
 #!/bin/sh
-# Shows the team wallpaper the admin chose. ck-agent writes it to /icpc/teamWallpaper.png at boot; with
+# Shows the team wallpaper the admin chose. ck-agent writes it to /etc/ck/team-wallpaper.png at boot; with
 # no picture the desktop keeps its own wallpaper. At login xfdesktop has no settings yet and setting them
 # at once changes nothing, so wait (up to two minutes) until they exist.
-picture=/icpc/teamWallpaper.png
+picture=/etc/ck/team-wallpaper.png
 [ -f "$picture" ] || exit 0
 i=0
 while [ "$i" -lt 120 ]; do

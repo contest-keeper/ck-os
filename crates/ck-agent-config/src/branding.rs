@@ -17,9 +17,9 @@ use crate::root::Root;
 
 const HOSTNAME: &str = "/etc/hostname";
 const HOSTS: &str = "/etc/hosts";
-/// The patched `set_wallpaper.sh`, which the desktop runs at login, shows this file when it exists
-/// and the image's default wallpaper otherwise.
-const TEAM_WALLPAPER: &str = "/icpc/teamWallpaper.png";
+/// `ck-wallpaper`, which the Keeper image runs at login, shows this file when it exists and the
+/// image's default wallpaper otherwise.
+const TEAM_WALLPAPER: &str = "/etc/ck/team-wallpaper.png";
 const FIREFOX_POLICIES: &str = "/usr/lib/firefox/distribution/policies.json";
 /// `ck-welcome`, which the image starts with the desktop, shows these two files when the text exists.
 const WELCOME_TEXT: &str = "/etc/ck/welcome.txt";
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn replaces_the_name_in_the_hosts_file_and_keeps_the_rest() {
-        let hosts = "127.0.0.1 localhost\n127.0.1.1 icpc\n\n::1 ip6-localhost\n";
+        let hosts = "127.0.0.1 localhost\n127.0.1.1 ubuntu\n\n::1 ip6-localhost\n";
         assert_eq!(
             hosts_with_name(hosts, "team-a-3"),
             "127.0.0.1 localhost\n127.0.1.1 team-a-3\n\n::1 ip6-localhost\n"

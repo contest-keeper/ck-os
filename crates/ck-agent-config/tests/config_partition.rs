@@ -112,7 +112,7 @@ fn the_wallpaper_comes_from_the_partition_the_settings_came_from() {
     );
     put(&dir, "ck-config/wall.png", b"new picture");
     put(&dir, "boot/efi/ck/wall.png", b"old picture");
-    put(&dir, "etc/hostname", "icpc\n");
+    put(&dir, "etc/hostname", "ubuntu\n");
     put(&dir, "etc/hosts", "127.0.0.1 localhost\n");
     put(
         &dir,
@@ -124,7 +124,7 @@ fn the_wallpaper_comes_from_the_partition_the_settings_came_from() {
     let loaded = load(&root).expect("loads");
     apply_branding(&root, &loaded).expect("applies");
     assert_eq!(
-        fs::read(dir.path().join("icpc/teamWallpaper.png")).expect("copied"),
+        fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
         b"new picture"
     );
 }

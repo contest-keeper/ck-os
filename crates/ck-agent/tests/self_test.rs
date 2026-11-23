@@ -67,7 +67,6 @@ fn reports_what_apply_config_wrote_and_never_the_secret() {
             "ck-config",
             "ck-recorder",
             "ck-uplink",
-            "icpc-screen-record",
             "ck-netlock",
             "squid",
             "ck-capture"

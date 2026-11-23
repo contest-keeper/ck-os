@@ -10,11 +10,10 @@ use std::process::Command;
 use ck_selftest::{Applied, Report, UnitState};
 
 /// The services the VM test cares about.
-const UNITS: [&str; 7] = [
+const UNITS: [&str; 6] = [
     "ck-config",
     "ck-recorder",
     "ck-uplink",
-    "icpc-screen-record",
     "ck-netlock",
     "squid",
     "ck-capture",
@@ -233,7 +232,7 @@ fn wallpaper_matches(root: &Path) -> Option<bool> {
     let on_stick = fs::read(root.join("ck-config").join(&name))
         .or_else(|_| fs::read(root.join("boot/efi/ck").join(&name)))
         .ok();
-    let shown = fs::read(root.join("icpc/teamWallpaper.png")).ok();
+    let shown = fs::read(root.join("etc/ck/team-wallpaper.png")).ok();
     Some(on_stick.is_some() && on_stick == shown)
 }
 
