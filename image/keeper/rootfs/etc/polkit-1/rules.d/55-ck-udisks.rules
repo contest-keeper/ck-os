@@ -1,0 +1,6 @@
+// Keeper OS: the contestant cannot mount, unlock, format or eject any disk through udisks2.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "contestant" && action.id.indexOf("org.freedesktop.udisks2.") === 0) {
+    return polkit.Result.NO;
+  }
+});

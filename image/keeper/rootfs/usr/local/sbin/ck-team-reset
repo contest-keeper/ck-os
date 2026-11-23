@@ -23,6 +23,7 @@ rm -rf "/home/$user"
 find /tmp /var/tmp -xdev -user "$uid" -delete 2>/dev/null || true
 
 useradd --uid "$uid" --create-home --shell /bin/bash "$user"
+chmod 0750 "/home/$user"
 passwd --lock "$user" >/dev/null
 chage --lastday "$(date -u +%F)" "$user"
 
