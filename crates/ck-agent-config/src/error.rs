@@ -13,6 +13,10 @@ pub enum Error {
     /// does not match, or it is made for another stick. `sha256` is the hash of the refused file.
     #[error("the settings file was refused: {reason}")]
     SettingsRejected { sha256: String, reason: String },
+    /// A release image must carry the list of keys that sign settings; without it nothing can be
+    /// checked, so nothing is applied.
+    #[error("this image has no list of settings keys at {0}")]
+    KeysMissing(String),
     #[error("the settings file is larger than {0} bytes")]
     SettingsTooLarge(u64),
     #[error("the settings have problems: {}", join(.0))]
