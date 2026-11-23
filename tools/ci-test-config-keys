@@ -1,0 +1,4 @@
+# CI TEST KEY, NOT A HUB KEY. Its private half was thrown away on creation, so nothing can be signed
+# for it. The smoke builds carry it because a release agent refuses to start without a key list.
+# The publishing build must never use this file; keeper-image.yml fails if it does.
+uGsO/QXjUnhiO7IrnWXPNlrDAn2IYm+LK1E545a6JNU=
