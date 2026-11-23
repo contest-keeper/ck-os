@@ -23,7 +23,7 @@ fn apply(root: &Path) -> Output {
 }
 
 fn put_settings(root: &Path, text: &str) {
-    let folder = root.join("boot/efi/ck");
+    let folder = root.join("ck-config");
     fs::create_dir_all(&folder).expect("efi folder");
     fs::write(folder.join("config.json"), text).expect("settings");
 }

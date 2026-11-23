@@ -1,24 +1,17 @@
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 
-use ck_image::{Guid, SECTOR_SIZE, write_config_file, write_file};
+use ck_image::{Guid, SECTOR_SIZE, write_config_file};
 use fatfs::{FatType, FormatVolumeOptions};
 use fscommon::StreamSlice;
 use tempfile::NamedTempFile;
 
-use super::{CONFIG_FILE, ESP_CONFIG_DIR, ESP_CONFIG_FILE, read_config};
+use super::{CONFIG_FILE, read_config};
 
 #[test]
-fn the_vm_uses_efi_only_when_the_ckconfig_file_is_missing() {
+fn the_vm_reads_the_settings_from_the_ckconfig_partition() {
     let image = config_image();
     let path = image.path();
-    let legacy_name = format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}");
-    write_file(path, &legacy_name, config("legacy").as_bytes()).expect("write ESP settings");
-    assert_eq!(
-        read_config(path).expect("read ESP settings").settings.team,
-        "legacy"
-    );
-
     write_config_file(path, CONFIG_FILE, b"invalid").expect("write invalid CKCONFIG settings");
     assert!(read_config(path).is_err());
 

@@ -18,9 +18,9 @@ const SETTINGS: &str = r#"{
 fn stick(settings: &str) -> (TempDir, Root) {
     let dir = TempDir::new().expect("temp dir");
     let root = Root::new(dir.path());
-    let efi = dir.path().join("boot/efi/ck");
-    fs::create_dir_all(&efi).expect("efi folder");
-    fs::write(efi.join("config.json"), settings).expect("settings");
+    let folder = dir.path().join("ck-config");
+    fs::create_dir_all(&folder).expect("config folder");
+    fs::write(folder.join("config.json"), settings).expect("settings");
     (dir, root)
 }
 
@@ -145,7 +145,7 @@ fn refuses_missing_or_bad_settings_without_writing_anything() {
     let (_dir, root) = stick("not json");
     assert!(matches!(load(&root), Err(Error::SettingsUnreadable(_))));
 
-    let (dir, root) = stick(&SETTINGS.replace(r#""schema": 1"#, r#""schema": 3"#));
+    let (dir, root) = stick(&SETTINGS.replace(r#""schema": 1"#, r#""schema": 9"#));
     let error = load(&root).expect_err("wrong schema");
     assert!(matches!(error, Error::SettingsInvalid(_)));
     assert!(!dir.path().join("etc").exists());
@@ -221,7 +221,7 @@ fn the_bluetooth_block_is_written_when_asked_and_removed_when_not() {
     );
 
     // The next boot has settings without the block: the old marker must not stay behind.
-    fs::write(dir.path().join("boot/efi/ck/config.json"), SETTINGS).expect("settings");
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
     apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
     assert!(!dir.path().join("etc/ck/block-bluetooth").exists());
 }
@@ -251,7 +251,7 @@ fn writes_the_wifi_connection_for_networkmanager_and_keeps_the_secret_to_two_pri
     let allowed = [
         "etc/NetworkManager/system-connections/ck-wifi.nmconnection",
         "etc/ck/config.json",
-        "boot/efi/ck/config.json",
+        "ck-config/config.json",
     ];
     let mut found = Vec::new();
     collect(dir.path(), dir.path(), &mut found);
@@ -262,7 +262,7 @@ fn writes_the_wifi_connection_for_networkmanager_and_keeps_the_secret_to_two_pri
                 "{relative} has the secret"
             );
             #[cfg(unix)]
-            if relative != "boot/efi/ck/config.json" {
+            if relative != "ck-config/config.json" {
                 use std::os::unix::fs::PermissionsExt;
                 let mode = fs::metadata(dir.path().join(&relative))
                     .expect("metadata")
@@ -298,7 +298,7 @@ fn an_open_network_has_no_security_section_and_a_removed_network_removes_the_fil
     let connection = read(&dir, path);
     assert!(connection.contains("ssid=Guest\n") && !connection.contains("wifi-security"));
 
-    fs::write(dir.path().join("boot/efi/ck/config.json"), SETTINGS).expect("settings");
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
     apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
     assert!(
         !dir.path().join(path).exists(),

@@ -7,7 +7,7 @@
 use std::fs;
 use std::io::ErrorKind;
 
-use ck_protocol::{ESP_CONFIG_FILE, StickConfig};
+use ck_protocol::{CONFIG_FILE, CONFIG_MOUNT_POINT, StickConfig};
 use serde_json::{Value, json};
 
 use crate::apply::write;
@@ -89,12 +89,12 @@ fn apply_wallpaper(root: &Root, loaded: &Loaded) -> Result<(), Error> {
 
     // The settings file holds the stick's secret and the wallpaper is readable by everyone, so it
     // is never copied out under that name. FAT ignores case.
-    if name.eq_ignore_ascii_case(ESP_CONFIG_FILE) {
+    if name.eq_ignore_ascii_case(CONFIG_FILE) {
         tracing::warn!("the wallpaper cannot be the settings file; keeping the current wallpaper");
         return Ok(());
     }
     // The settings check makes `name` a plain file name, so it cannot point outside the folder.
-    let source = root.path(&format!("{}/{name}", loaded.source.folder()));
+    let source = root.path(&format!("{CONFIG_MOUNT_POINT}/{name}"));
     let size = match fs::metadata(&source) {
         Ok(meta) if meta.is_file() => meta.len(),
         Ok(_) => {
