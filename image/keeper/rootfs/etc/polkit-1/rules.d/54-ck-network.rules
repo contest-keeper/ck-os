@@ -1,0 +1,10 @@
+// Keeper OS: the contestant may switch Wi-Fi on and off and join the networks that are already set up
+// (enable-disable-wifi, network-control), but may not add, change or remove a connection or its DNS.
+// A changed connection could point the machine at another DNS server or proxy settings.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "contestant" &&
+      (action.id.indexOf("org.freedesktop.NetworkManager.settings.modify.") === 0 ||
+       action.id.indexOf("org.freedesktop.NetworkManager.wifi.share.") === 0)) {
+    return polkit.Result.NO;
+  }
+});
