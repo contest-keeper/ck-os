@@ -506,7 +506,7 @@ class ImagePatchTests(unittest.TestCase):
         self.assertIn('socket cgroupv2 level 1 "cknet.slice" accept', lock)
         self.assertNotIn("skuid", lock)
         self.assertTrue((unit_dir / "cknet.slice").is_file())
-        for unit in ("ck-uplink.service", "ck-recording-upload.service", "NetworkManager.service.d/10-ck.conf",
+        for unit in ("ck-uplink.service", "ck-recording-upload.service", "NetworkManager.service.d/10-ck.conf", "systemd-networkd.service.d/10-ck.conf",
                      "squid.service.d/20-cknet.conf", "systemd-timesyncd.service.d/20-cknet.conf"):
             with self.subTest(unit=unit):
                 text = (unit_dir / unit).read_text()
