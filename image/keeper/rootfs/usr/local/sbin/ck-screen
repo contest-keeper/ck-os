@@ -10,7 +10,9 @@ display_manager=org.freedesktop.DisplayManager
 if [[ ${1:-} == pam ]]; then
   if [[ ${PAM_USER:-} == ckreset ]]; then
     # The reset login has no password, so it signs in only while the organizer has allowed it (ck-reset-allow).
-    [[ ! -e $state && -n $(find /run/ck-reset-allowed -mmin -2 2>/dev/null) ]]
+    # Two minutes to the second (find -mmin rounds up and would allow only one).
+    allowed_at=$(stat -c %Y /run/ck-reset-allowed 2>/dev/null) || exit 1
+    [[ ! -e $state ]] && (( $(date +%s) - allowed_at < 120 ))
     exit
   fi
   [[ ! -e $state || ${PAM_USER:-} == ckadmin ]]
