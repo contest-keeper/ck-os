@@ -500,6 +500,20 @@ class ImagePatchTests(unittest.TestCase):
                 self.assertIn("\nRequires=ck-netlock.service\n", drop_in)
                 self.assertIn("\nAfter=ck-netlock.service\n", drop_in)
 
+    def test_only_the_units_in_the_network_slice_may_use_the_network(self):
+        unit_dir = PATCH / "rootfs" / "etc" / "systemd" / "system"
+        lock = (PATCH / "rootfs" / "etc" / "ck" / "netlock.nft").read_text()
+        self.assertIn('socket cgroupv2 level 1 "cknet.slice" accept', lock)
+        self.assertNotIn("skuid", lock)
+        self.assertTrue((unit_dir / "cknet.slice").is_file())
+        for unit in ("ck-uplink.service", "ck-recording-upload.service", "NetworkManager.service.d/10-ck.conf",
+                     "squid.service.d/20-cknet.conf", "systemd-timesyncd.service.d/20-cknet.conf"):
+            with self.subTest(unit=unit):
+                text = (unit_dir / unit).read_text()
+                self.assertIn("\nSlice=cknet.slice\n", text)
+                self.assertIn("\nRequires=cknet.slice\n", text)
+        self.assertIn("\nRequires=cknet.slice\n", (unit_dir / "ck-netlock.service").read_text())
+
     def test_fails_when_filesystem_check_fails(self):
         result = self.run_patch(FAIL_FSCK="1")
         self.assertNotEqual(result.returncode, 0)

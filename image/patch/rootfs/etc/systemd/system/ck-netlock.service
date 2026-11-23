@@ -5,6 +5,9 @@ DefaultDependencies=no
 After=local-fs.target
 Before=network-pre.target
 Wants=network-pre.target
+# The rule names the slice's cgroup, which must exist when the rules are loaded.
+Requires=cknet.slice
+After=cknet.slice
 
 [Service]
 Type=oneshot

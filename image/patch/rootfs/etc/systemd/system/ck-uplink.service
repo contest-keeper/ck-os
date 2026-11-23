@@ -1,4 +1,6 @@
 [Unit]
+Requires=cknet.slice
+After=cknet.slice
 Description=Keeper OS: send heartbeats to the Hub
 # The settings and the stick's secret are written by ck-config, so wait for it. A stick whose
 # settings name no server, or none at all, has nothing to report and this service ends at once.
@@ -6,6 +8,7 @@ After=ck-config.service network-online.target
 Wants=network-online.target
 
 [Service]
+Slice=cknet.slice
 ExecStart=/usr/local/bin/ck-agent uplink
 Restart=on-failure
 RestartSec=10

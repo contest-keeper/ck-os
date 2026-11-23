@@ -1,9 +1,12 @@
 [Unit]
+Requires=cknet.slice
+After=cknet.slice
 Description=Keeper OS: upload completed recordings and apply local retention
 After=ck-config.service
 ConditionPathExists=/etc/ck/config.json
 
 [Service]
+Slice=cknet.slice
 Type=oneshot
 ExecStart=/usr/local/bin/ck-agent upload-recordings
 TimeoutStartSec=180
