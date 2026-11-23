@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Lets the reset login (ckreset) sign in for the next two minutes. Only root runs this; the organizer gets
+# there with `sudo ck-reset-allow`, which asks for the admin password. ck-screen pam checks the flag and
+# ck-team-reset removes it.
+set -euo pipefail
+[[ $EUID == 0 ]] || { echo "run with sudo" >&2; exit 1; }
+install -m 0600 /dev/null /run/ck-reset-allowed
+echo "The reset login can sign in for the next two minutes."

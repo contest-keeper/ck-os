@@ -8,6 +8,11 @@ display_manager=org.freedesktop.DisplayManager
 
 [[ $EUID == 0 ]] || exit 1
 if [[ ${1:-} == pam ]]; then
+  if [[ ${PAM_USER:-} == ckreset ]]; then
+    # The reset login has no password, so it signs in only while the organizer has allowed it (ck-reset-allow).
+    [[ ! -e $state && -n $(find /run/ck-reset-allowed -mmin -2 2>/dev/null) ]]
+    exit
+  fi
   [[ ! -e $state || ${PAM_USER:-} == ckadmin ]]
   exit
 fi
