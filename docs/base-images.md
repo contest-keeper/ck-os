@@ -18,7 +18,6 @@ Checked after patching:
 - The patch script read every installed file back from the image and reported "Patch applied and verified".
 - `e2fsck -fn` on the root filesystem is clean.
 - `/usr/local/bin/ck-agent` is root-owned, mode 0755 and identical to `dist/ck-agent`.
-- `icpc-screen-record.service` is masked and `/icpc/scripts/screen-record` is removed.
 - `ck-recorder.service` and `ck-config.service` are enabled.
 
 Known problem: the leftover `ck/config.json` has no `schema`, so on an unconfigured stick `ck-agent apply-config` exits 1 instead of 3. A stick made by `ck-forge image build` overwrites it.
@@ -28,7 +27,7 @@ source again gives a different hash if any timestamp or free block differs.
 
 ## Keeper OS image built from stock Ubuntu (`tools/build-image`)
 
-This is the new flow (plan: `plan-keeper-os-from-stock-ubuntu.md`). It does not touch any ICPC image.
+This is the new flow (plan: `plan-keeper-os-from-stock-ubuntu.md`). It starts from stock Ubuntu.
 
 Needs root, a Linux kernel with loop devices and: `mmdebstrap`, `sfdisk`, `losetup`, `mkfs.vfat`, `mkfs.ext4`,
 `zstd`, `tar`. Run it in WSL2 (as root, for example `wsl -u root`) or on a Linux CI runner:
