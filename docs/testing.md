@@ -20,7 +20,7 @@ patch, the agent or the settings format. It takes about 25 seconds with accelera
    - the root-only copy of the settings matches its stored hash;
    - `ck-config` is active and enabled, `ck-recorder` is enabled (and active unless recording is off),
      `ck-uplink` is enabled (and active when the settings name a server), `ck-netlock` is active and
-     enabled, and the contest's old `icpc-screen-record` is masked.
+     enabled.
 
 Exit code 0 is PASS, 1 is FAIL with the reasons listed, 2 means the test could not run (no QEMU,
 unreadable image) so nothing is known about the image.
