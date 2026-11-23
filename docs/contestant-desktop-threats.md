@@ -9,7 +9,7 @@ what to block, how, and how we test it as `contestant`.
 | 2 | Privilege escalation (`sudo`, `su`, `pkexec`, polkit prompts) | `contestant` not in `sudo`/`adm`; no sudoers entry except the reset helper; no polkit allow rules for it | `sudo -n true` and `pkexec true` fail |
 | 3 | Network bypass (own proxy, VPN, tethering, changing NetworkManager) | `ck-netlock` nftables fail-closed; polkit rule `54-ck-network.rules` denying every NetworkManager settings change (the panel `nm-applet` stays and only switches Wi-Fi and joins known networks); DNS stays pinned to the router by `resolv.conf` and the network lock; no `nmcli` permission | `nmcli connection add` denied; direct connect to a non-allowed IP fails |
 | 4 | Adding Wi-Fi | Same as 3 (#37); preset Wi-Fi comes from CKCONFIG, root-owned `0600` | Denied for contestant |
-| 5 | USB storage and phones | `usb-storage`/`uas` blocked (modprobe blacklist plus udisks policy); no automount | Plugging a stick shows nothing, `lsblk` lacks it |
+| 5 | USB storage and phones | udisks2 is not installed and its polkit rule `55-ck-udisks.rules` would refuse every disk action; Thunderbolt blocked in modprobe; `usb-storage` is not blacklisted because the stick boots from USB and initramfs copies the modprobe settings; Bluetooth stays the admin setting; homes are `0750` | Plugging a stick shows nothing, `lsblk` lacks it |
 | 6 | Bluetooth | `rfkill block bluetooth`, module blacklist (#3) | `rfkill list` blocked |
 | 7 | Printing | `cups` not installed (#40) | No print dialog target, no `lpstat` |
 | 8 | Browser reaching other sites or local files | Squid allow-list, `file://` and `view-source` limited by Firefox policy, no downloads outside home, no extensions install | `file:///etc/` blocked, non-allowed domain denied |

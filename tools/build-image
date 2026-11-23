@@ -332,6 +332,8 @@ grep -q nopasswdlogin "$MNT/etc/pam.d/lightdm" || {
 }
 chroot "$MNT" groupadd --force nopasswdlogin
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups nopasswdlogin ckreset
+# Nobody reads another account's files: homes are owner and group only.
+chmod 0750 "$MNT"/home/contestant "$MNT"/home/ckadmin "$MNT"/home/ckreset
 for account in contestant ckadmin ckreset root; do
   chroot "$MNT" passwd --lock "$account" >/dev/null
   chroot "$MNT" chage --lastday "$last_change" "$account"

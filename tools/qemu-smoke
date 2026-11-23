@@ -128,6 +128,10 @@ run_checks() {
     'for i in $(seq 60); do pgrep -u contestant -x xfce4-session >/dev/null && break; sleep 2; done; echo CK8_$(pgrep -u contestant -x xfce4-session | wc -l)_session'
     'pkcheck --action-id org.freedesktop.NetworkManager.enable-disable-wifi --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo CK9_wifi_switch_$?'
     'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK46_nmedit_$(p org.freedesktop.NetworkManager.settings.modify.own)_$(p org.freedesktop.NetworkManager.settings.modify.system)_$(p org.freedesktop.NetworkManager.settings.modify.global-dns)'
+    'dpkg -s udisks2 >/dev/null 2>&1 && u=installed || u=absent; test -f /etc/polkit-1/rules.d/55-ck-udisks.rules && r=rule || r=norule; echo CK47_udisks_${u}_$r'
+    'echo CK48_thunderbolt_$(modprobe -n -v thunderbolt 2>&1 | grep -c "/bin/false")'
+    'echo CK49_homes_$(stat -c %a /home/contestant /home/ckadmin | tr -s "
+" "_")$(runuser -u contestant -- ls /home/ckadmin >/dev/null 2>&1 && echo readable || echo denied)'
     'test -x /usr/bin/nm-applet && test -f /etc/xdg/autostart/nm-applet.desktop && grep -q systray /etc/xdg/xfce4/panel/default.xml && echo CK10_network_menu_ok'
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
@@ -195,6 +199,9 @@ run_checks() {
   # polkit lets the contestant's session switch Wi-Fi on and off.
   expect 'CK9_wifi_switch_0' 'polkit lets the contestant switch Wi-Fi on and off'
   expect 'CK46_nmedit_1_1_1' 'polkit does not let the contestant add or change a network connection or its DNS'
+  expect 'CK47_udisks_absent_rule' 'udisks2 is not installed (nothing mounts disks for the contestant) and its polkit deny rule is in place'
+  expect 'CK48_thunderbolt_1' 'the Thunderbolt driver cannot be loaded'
+  expect 'CK49_homes_750_750_denied' 'home folders are 0750 and the contestant cannot read the admin home'
   expect 'CK10_network_menu_ok' 'the network menu is installed, starts with the desktop and the panel has a notification area'
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
   expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'
