@@ -195,7 +195,7 @@ fn an_image_without_keys_takes_unsigned_settings_as_before() {
     assert!(!booted.loaded.verified);
     assert_eq!(stick.marker(), "unchecked\n");
 
-    // The legacy copy on the EFI partition still works there.
+    // The legacy copy on the EFI partition is not read, with or without keys.
     let legacy = Stick::new(&[]);
     fs::remove_dir_all(legacy.path("ck-config")).expect("no ckconfig");
     fs::create_dir_all(legacy.path("boot/efi/ck")).expect("efi");
@@ -204,7 +204,7 @@ fn an_image_without_keys_takes_unsigned_settings_as_before() {
         SETTINGS.replace(r#""schema": 2"#, r#""schema": 1"#),
     )
     .expect("legacy settings");
-    assert!(load(&legacy.root).is_ok());
+    assert!(matches!(load(&legacy.root), Err(Error::SettingsMissing(_))));
 }
 
 #[test]

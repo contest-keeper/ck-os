@@ -3,7 +3,7 @@
 //! The settings file on the `CKCONFIG` partition can be edited by anyone who holds the stick, on any
 //! PC. An image that carries public keys (`/etc/ck/config-public-keys`) therefore only takes a
 //! settings file whose signature the Hub made (`config.json.sig`), and refuses anything else: an
-//! edited file, an unsigned one, one signed with another key, one on the legacy EFI partition, and
+//! edited file, an unsigned one, one signed with another key, and
 //! one that is signed but made for another stick than the one that is already set up.
 //!
 //! A refused file is ignored. The stick goes on with the last settings it verified, which are kept
@@ -14,12 +14,12 @@ use std::fs::File;
 use std::io::{ErrorKind, Read};
 
 use ck_crypto::{CONFIG_SIGNATURE_FILE, ConfigVerifyingKey, parse_verifying_keys, verify_config};
-use ck_protocol::CONFIG_PUBLIC_KEYS_PATH;
+use ck_protocol::{CONFIG_MOUNT_POINT, CONFIG_PUBLIC_KEYS_PATH};
 use serde::Deserialize;
 
 use crate::apply::write;
 use crate::error::Error;
-use crate::load::{Loaded, MAX_SETTINGS_BYTES, Source};
+use crate::load::{Loaded, MAX_SETTINGS_BYTES};
 use crate::root::Root;
 
 /// What the agent kept of the settings it applied at the last boot that could.
@@ -118,19 +118,8 @@ fn rejected(raw: &[u8], reason: impl Into<String>) -> Error {
 
 /// Checks the exact bytes of a settings file against the signature next to it. This runs before
 /// anything is read out of the file, so nothing in a refused file reaches the system.
-pub(crate) fn verify(
-    root: &Root,
-    source: Source,
-    raw: &[u8],
-    keys: &[ConfigVerifyingKey],
-) -> Result<(), Error> {
-    if source == Source::Esp {
-        return Err(rejected(
-            raw,
-            "settings on the EFI partition are not accepted by this image",
-        ));
-    }
-    let path = format!("{}/{CONFIG_SIGNATURE_FILE}", source.folder());
+pub(crate) fn verify(root: &Root, raw: &[u8], keys: &[ConfigVerifyingKey]) -> Result<(), Error> {
+    let path = format!("{CONFIG_MOUNT_POINT}/{CONFIG_SIGNATURE_FILE}");
     let Some(text) = read_limited(root, &path, MAX_SIGNATURE_BYTES)? else {
         return Err(rejected(raw, "the settings are not signed"));
     };
@@ -177,7 +166,6 @@ pub fn load_last_good(root: &Root) -> Result<Option<Loaded>, Error> {
     }
     let sha256 = ck_crypto::sha256_hex(&raw);
     Ok(Some(Loaded {
-        source: Source::CkConfig,
         config,
         raw,
         sha256,

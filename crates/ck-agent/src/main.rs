@@ -36,7 +36,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Read the admin's settings from the EFI partition and apply them to this machine
+    /// Read the admin's settings from the CKCONFIG partition and apply them to this machine
     ApplyConfig {
         /// The folder that stands for `/` (only for tests; the stick uses `/`)
         #[arg(long, default_value = "/")]

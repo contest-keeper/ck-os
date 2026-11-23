@@ -26,7 +26,7 @@ fn agent(args: &[&str], root: &Path) -> Output {
 
 fn configured_root() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
-    let efi = dir.path().join("boot/efi/ck");
+    let efi = dir.path().join("ck-config");
     fs::create_dir_all(&efi).expect("efi folder");
     fs::write(efi.join("config.json"), SETTINGS).expect("settings");
     assert_eq!(agent(&["apply-config"], dir.path()).status.code(), Some(0));

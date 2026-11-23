@@ -36,7 +36,7 @@ fn stick(settings: &str) -> (TempDir, Root) {
     let dir = TempDir::new().expect("temp dir");
     let root = Root::new(dir.path());
     for (path, content) in [
-        ("boot/efi/ck/config.json", settings),
+        ("ck-config/config.json", settings),
         ("etc/hostname", "ubuntu\n"),
         ("etc/hosts", IMAGE_HOSTS),
         ("usr/lib/firefox/distribution/policies.json", IMAGE_POLICIES),
@@ -87,7 +87,7 @@ fn a_stick_without_a_number_counts_as_machine_1() {
 #[test]
 fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "wall.png"}"#));
-    fs::write(dir.path().join("boot/efi/ck/wall.png"), b"\x89PNG picture").expect("wallpaper");
+    fs::write(dir.path().join("ck-config/wall.png"), b"\x89PNG picture").expect("wallpaper");
     apply(&root).expect("apply");
     assert_eq!(
         fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
@@ -95,7 +95,7 @@ fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
     );
 
     // The same stick is configured again with no wallpaper: the image's own shows again.
-    fs::write(dir.path().join("boot/efi/ck/config.json"), settings("{}")).expect("new settings");
+    fs::write(dir.path().join("ck-config/config.json"), settings("{}")).expect("new settings");
     apply(&root).expect("apply again");
     assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
 }
@@ -204,7 +204,7 @@ fn writes_the_welcome_text_and_title_and_takes_them_away_when_none_is_chosen() {
     assert_eq!(read(&dir, "etc/ck/welcome-title"), "Spring Contest 2026\n");
 
     // The same stick is configured again with no text: the window must not show the old one.
-    fs::write(dir.path().join("boot/efi/ck/config.json"), settings("{}")).expect("new settings");
+    fs::write(dir.path().join("ck-config/config.json"), settings("{}")).expect("new settings");
     apply(&root).expect("apply again");
     assert!(!dir.path().join("etc/ck/welcome.txt").exists());
     assert!(!dir.path().join("etc/ck/welcome-title").exists());

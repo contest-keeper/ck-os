@@ -15,11 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use ck_agent_config::{Source, read_with_esp_fallback};
-use ck_protocol::{
-    CONFIG_FILE, ENROLMENT_SCHEMA, ESP_CONFIG_DIR, ESP_CONFIG_FILE, EnrolmentConfig, Problem,
-    StickConfig,
-};
+use ck_protocol::{CONFIG_FILE, ENROLMENT_SCHEMA, EnrolmentConfig, Problem, StickConfig};
 use clap::Parser;
 
 use check::ExpectedConfig;
@@ -172,27 +168,11 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
 }
 
 fn read_config(image: &Path) -> Result<ExpectedConfig, String> {
-    let (source, bytes) = read_with_esp_fallback(
-        |source| {
-            match source {
-                Source::CkConfig => ck_image::read_config_file(image, CONFIG_FILE),
-                Source::Esp => {
-                    ck_image::read_file(image, &format!("{ESP_CONFIG_DIR}/{ESP_CONFIG_FILE}"))
-                }
-            }
-            .map(|bytes| (source, bytes))
-        },
-        |error| {
-            matches!(
-                error,
-                ck_image::Error::NoConfigPartition | ck_image::Error::FileNotFound(_)
-            )
-        },
-    )
-    .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
+    let bytes = ck_image::read_config_file(image, CONFIG_FILE)
+        .map_err(|e| format!("reading the settings from {}: {e}", image.display()))?;
     let invalid = |error| format!("the settings in the image are not valid: {error}");
     let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(invalid)?;
-    if source == Source::CkConfig && json["schema"].as_u64() == Some(u64::from(ENROLMENT_SCHEMA)) {
+    if json["schema"].as_u64() == Some(u64::from(ENROLMENT_SCHEMA)) {
         let config: EnrolmentConfig = serde_json::from_slice(&bytes).map_err(invalid)?;
         let expected = ExpectedConfig {
             stick_id: config.stick_id,
