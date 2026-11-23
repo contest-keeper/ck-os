@@ -17,8 +17,8 @@ use crate::root::Root;
 
 const HOSTNAME: &str = "/etc/hostname";
 const HOSTS: &str = "/etc/hosts";
-/// The patched `set_wallpaper.sh`, which the desktop runs at login, shows this file when it exists
-/// and the image's default wallpaper otherwise.
+/// `ck-wallpaper`, which the Keeper image runs at login, shows this file when it exists and the
+/// image's default wallpaper otherwise.
 const TEAM_WALLPAPER: &str = "/etc/ck/team-wallpaper.png";
 const FIREFOX_POLICIES: &str = "/usr/lib/firefox/distribution/policies.json";
 /// `ck-welcome`, which the image starts with the desktop, shows these two files when the text exists.
