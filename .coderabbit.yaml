@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    base_branches: ["^develop$"]
+    ignore_usernames: ["dependabot[bot]"]
+  tools:
+    shellcheck:
+      enabled: true
+    clippy:
+      enabled: true
+  path_instructions:
+    - path: "image/**"
+      instructions: |
+        Builds the locked-down contestant image. Check that nothing weakens the network lock, the boot menu protection or the screen recording, that scripts fail closed, that no secret or Wi-Fi password is written to the image, and that downloads are pinned with a checksum.
+    - path: "crates/ck-agent-config/**"
+      instructions: |
+        Reads and verifies the stick settings. Settings must only be accepted when the Hub signature verifies; check there is no fallback that skips it.
