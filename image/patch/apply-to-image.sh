@@ -52,7 +52,6 @@ add_agent_binary "$agent_file" "$payload_directory"
 : >"$commands_file"
 
 # 3. Plan the changes. The image is not written during these steps.
-prepare_legacy_reset "$filesystem" "$work_directory" "$payload_directory"
 if [[ -n "$boot_filesystem" ]]; then
   prepare_cloud_payload "$patch_directory" "$payload_directory"
   boot_payload="$work_directory/bootfs"
