@@ -14,7 +14,8 @@ const IMAGE_POLICIES: &str = r#"{
   }
 }"#;
 
-const IMAGE_HOSTS: &str = "127.0.0.1 localhost\n127.0.1.1 icpc\n\n::1 ip6-localhost ip6-loopback\n";
+const IMAGE_HOSTS: &str =
+    "127.0.0.1 localhost\n127.0.1.1 ubuntu\n\n::1 ip6-localhost ip6-loopback\n";
 
 fn settings(branding: &str) -> String {
     format!(
@@ -36,7 +37,7 @@ fn stick(settings: &str) -> (TempDir, Root) {
     let root = Root::new(dir.path());
     for (path, content) in [
         ("boot/efi/ck/config.json", settings),
-        ("etc/hostname", "icpc\n"),
+        ("etc/hostname", "ubuntu\n"),
         ("etc/hosts", IMAGE_HOSTS),
         ("usr/lib/firefox/distribution/policies.json", IMAGE_POLICIES),
     ] {
@@ -89,14 +90,14 @@ fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
     fs::write(dir.path().join("boot/efi/ck/wall.png"), b"\x89PNG picture").expect("wallpaper");
     apply(&root).expect("apply");
     assert_eq!(
-        fs::read(dir.path().join("icpc/teamWallpaper.png")).expect("copied"),
+        fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
         b"\x89PNG picture"
     );
 
     // The same stick is configured again with no wallpaper: the image's own shows again.
     fs::write(dir.path().join("boot/efi/ck/config.json"), settings("{}")).expect("new settings");
     apply(&root).expect("apply again");
-    assert!(!dir.path().join("icpc/teamWallpaper.png").exists());
+    assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
 }
 
 #[test]
@@ -104,18 +105,18 @@ fn the_settings_file_is_never_copied_out_as_the_wallpaper() {
     // The settings file holds the stick's secret and the wallpaper is readable by everyone.
     let (dir, root) = stick(&settings(r#"{"wallpaper": "config.json"}"#));
     apply(&root).expect("apply");
-    assert!(!dir.path().join("icpc/teamWallpaper.png").exists());
+    assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
     assert_eq!(read(&dir, "etc/hostname"), "team-a-7\n");
 }
 
 #[test]
 fn a_missing_wallpaper_file_does_not_stop_the_other_settings() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "gone.png"}"#));
-    fs::create_dir_all(dir.path().join("icpc")).expect("folder");
-    fs::write(dir.path().join("icpc/teamWallpaper.png"), b"earlier").expect("earlier");
+    fs::create_dir_all(dir.path().join("etc/ck")).expect("folder");
+    fs::write(dir.path().join("etc/ck/team-wallpaper.png"), b"earlier").expect("earlier");
     apply(&root).expect("apply");
     assert_eq!(read(&dir, "etc/hostname"), "team-a-7\n");
-    assert_eq!(read(&dir, "icpc/teamWallpaper.png"), "earlier");
+    assert_eq!(read(&dir, "etc/ck/team-wallpaper.png"), "earlier");
 }
 
 #[test]
