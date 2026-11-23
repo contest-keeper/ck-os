@@ -40,7 +40,7 @@ fn screen_command(unlock: bool) -> Result<(), String> {
     if unlock || keeper_image {
         return Err("this image has no Keeper screen service".to_owned());
     }
-    // Keep the stock desktop lock behavior on patched ICPC images.
+    // Keep the stock desktop lock behavior on images without the Keeper screen service.
     run("loginctl", &["lock-sessions"])
 }
 

@@ -147,14 +147,6 @@ fn check_services(problems: &mut Vec<String>, settings: &Settings, report: &Repo
         reports.then_some("active"),
         enabled,
     );
-    // ICPC-based images mask their old recorder, and generic images omit it.
-    unit(
-        problems,
-        report,
-        "icpc-screen-record",
-        Some("inactive"),
-        &["masked", "not-found"],
-    );
     unit(problems, report, "ck-netlock", Some("active"), enabled);
     unit(problems, report, "squid", Some("active"), enabled);
     unit(problems, report, "ck-capture", Some("active"), enabled);
@@ -254,7 +246,6 @@ mod tests {
                 state("ck-config", "active", "enabled"),
                 state("ck-recorder", "active", "enabled"),
                 state("ck-uplink", "inactive", "enabled"),
-                state("icpc-screen-record", "inactive", "masked"),
                 state("ck-netlock", "active", "enabled"),
                 state("squid", "active", "enabled"),
                 state("ck-capture", "active", "enabled"),
@@ -274,18 +265,14 @@ mod tests {
         report.applied.allowed_domains = vec!["example.org".to_owned()];
         report.applied.config_hash_matches = false;
         report.units[1].active = "failed".to_owned();
-        report.units[3].enabled = "enabled".to_owned();
+        report.units[3].active = "failed".to_owned();
         let found = problems(&config(), &report);
         assert_eq!(found.len(), 5, "{found:?}");
         assert!(found.iter().any(|p| p.starts_with("team is")));
         assert!(found.iter().any(|p| p.contains("allowed sites")));
         assert!(found.iter().any(|p| p.contains("hash")));
         assert!(found.iter().any(|p| p.contains("ck-recorder is failed")));
-        assert!(
-            found
-                .iter()
-                .any(|p| p.contains("icpc-screen-record is enabled"))
-        );
+        assert!(found.iter().any(|p| p.contains("ck-netlock is failed")));
     }
 
     #[test]
@@ -299,37 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_image_can_report_that_the_icpc_recorder_is_not_installed() {
-        let mut report = good_report();
-        let recorder = report
-            .units
-            .iter_mut()
-            .find(|u| u.name == "icpc-screen-record")
-            .expect("legacy recorder row");
-        recorder.enabled = "not-found".to_owned();
-        assert_eq!(problems(&config(), &report), Vec::<String>::new());
-    }
-
-    #[test]
-    fn an_active_icpc_recorder_is_a_problem_even_if_masked() {
-        let mut report = good_report();
-        let recorder = report
-            .units
-            .iter_mut()
-            .find(|u| u.name == "icpc-screen-record")
-            .expect("legacy recorder row");
-        recorder.active = "active".to_owned();
-        assert_eq!(
-            problems(&config(), &report),
-            ["icpc-screen-record is active, expected inactive"]
-        );
-    }
-
-    #[test]
     fn the_proxy_and_the_capture_service_must_be_running() {
         let mut report = good_report();
-        report.units[5].active = "failed".to_owned();
-        report.units[6].enabled = "disabled".to_owned();
+        report.units[4].active = "failed".to_owned();
+        report.units[5].enabled = "disabled".to_owned();
         let found = problems(&config(), &report);
         assert!(
             found.iter().any(|p| p.contains("squid is failed")),
@@ -407,7 +367,7 @@ mod tests {
 
         let mut report = good_report();
         report.applied.computer_name = Some("team-a-7".to_owned());
-        report.applied.running_hostname = Some("icpc".to_owned());
+        report.applied.running_hostname = Some("ubuntu".to_owned());
         report.applied.firefox_bookmarks = vec!["Other".to_owned()];
         report.applied.firefox_home_page = None;
         let found = problems(&stick, &report);

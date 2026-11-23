@@ -349,8 +349,6 @@ done
 chroot "$MNT" install -m 0755 -o ckadmin -g ckadmin /usr/local/share/keeper/ck-unlock-screen.desktop \
   /home/ckadmin/Desktop/ck-unlock-screen.desktop
 
-# ck-agent writes the team wallpaper here, and ck-wallpaper shows it.
-install -d -m 0755 "$MNT/icpc"
 if [[ $DEBUG_LOGIN -eq 1 ]]; then
   chroot "$MNT" passwd -d root
 fi
