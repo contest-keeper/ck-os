@@ -115,6 +115,8 @@ run_checks() {
     'mount_unit=$(systemd-escape --path --suffix=mount /ck-config); systemctl show -p After --value ck-config.service | tr " " "\n" | grep -Fxq -e "$mount_unit" -e "$(printf "\"%q\"" "$mount_unit")" && echo CK41_ckconfig_$((3+4))'
     'runuser -u contestant -- notify-send --version >/dev/null && echo CK42_notify_$((3+5))'
     'device=$(systemd-escape --path --suffix=device /dev/disk/by-partlabel/CKCONFIG); test "$(systemctl show -p JobRunningTimeoutUSec --value "$device")" = 30s && echo CK43_ckconfig_wait_$((3+6))'
+    # An unsigned settings file on CKCONFIG must be refused: exit 3, trust marker "rejected", nothing applied.
+    'r=/tmp/ck45; rm -rf $r; mkdir -p $r/ck-config $r/etc/ck; cp /etc/ck/config-public-keys $r/etc/ck/; echo "{}" >$r/ck-config/config.json; ck-agent apply-config --root $r >/dev/null 2>&1; rc=$?; echo CK45_unsigned_${rc}_$(cut -d" " -f1 $r/etc/ck/config.trust)_$(test -e $r/etc/hostname && echo applied || echo untouched)'
     'echo .example.com >/etc/squid/acl_allowed_domains.txt; systemctl restart squid; sleep 3'
     "curl $proxy -w 'CK3_%{http_code}\n' https://example.com/"
     "curl $proxy -w 'CK4_%{http_code}\n' https://example.org/"
@@ -175,6 +177,7 @@ run_checks() {
   expect 'CK41_ckconfig_7' 'ck-config is ordered after the CKCONFIG mount'
   expect 'CK42_notify_8' 'the contestant session can launch notify-send for Hub messages'
   expect 'CK43_ckconfig_wait_9' 'CKCONFIG has 30 seconds to become available on slow media'
+  expect 'CK45_unsigned_3_rejected_untouched' 'the stick refuses a settings file the Hub did not sign'
   expect 'CK3_200' 'an allowed site works through Squid (CA trusted, capture up)'
   if grep -q 'CK4_200' "$log"; then
     echo "FAIL a site that is not allowed was reachable" >&2
