@@ -148,6 +148,10 @@ fn apply_config(root: &Root) -> ExitCode {
             record_trust(root, &Trust::Rejected(sha256));
             return ExitCode::from(EXIT_NO_SETTINGS);
         }
+        Err(error @ Error::KeysMissing(_)) => {
+            tracing::error!("no settings can be checked, so none are applied: {error}");
+            return ExitCode::FAILURE;
+        }
         Err(error) => {
             tracing::error!("cannot use the settings, keeping the image defaults: {error}");
             return ExitCode::FAILURE;

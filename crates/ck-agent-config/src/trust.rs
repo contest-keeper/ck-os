@@ -31,8 +31,8 @@ pub const TRUST_MARKER: &str = "/etc/ck/config.trust";
 const MAX_SIGNATURE_BYTES: u64 = 4096;
 const MAX_KEY_LIST_BYTES: u64 = 64 * 1024;
 
-/// The keys an image trusts to sign settings, or nothing when it carries none. An image that carries
-/// none takes a settings file as it is, like every image before signing.
+/// The keys an image trusts to sign settings. Only a development build may have none, and then it
+/// takes a settings file as it is.
 pub(crate) enum Keys {
     Unchecked,
     Trusted(Vec<ConfigVerifyingKey>),
@@ -84,10 +84,19 @@ fn read_limited(root: &Root, path: &str, limit: u64) -> Result<Option<Vec<u8>>, 
 }
 
 /// Reads the key list of the image. A list that cannot be read as keys trusts nothing, so every
-/// settings file is refused: a damaged list must not turn the check off.
+/// settings file is refused: a damaged list must not turn the check off. A release build without a
+/// list is an error; only a development build (debug assertions on) takes settings unchecked.
 pub(crate) fn load_keys(root: &Root) -> Result<Keys, Error> {
+    load_keys_with(root, !cfg!(debug_assertions))
+}
+
+fn load_keys_with(root: &Root, list_required: bool) -> Result<Keys, Error> {
     let Some(bytes) = read_limited(root, CONFIG_PUBLIC_KEYS_PATH, MAX_KEY_LIST_BYTES)? else {
-        return Ok(Keys::Unchecked);
+        return if list_required {
+            Err(Error::KeysMissing(CONFIG_PUBLIC_KEYS_PATH.to_owned()))
+        } else {
+            Ok(Keys::Unchecked)
+        };
     };
     match parse_verifying_keys(&String::from_utf8_lossy(&bytes)) {
         Ok(keys) => Ok(Keys::Trusted(keys)),
@@ -211,5 +220,21 @@ pub fn load_for_boot(root: &Root) -> Result<Booted, Error> {
             None => Err(Error::SettingsRejected { sha256, reason }),
         },
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_key_list_is_fatal_when_it_is_required() {
+        let dir = tempfile::tempdir().expect("dir");
+        let root = Root::new(dir.path());
+        assert!(matches!(
+            load_keys_with(&root, true),
+            Err(Error::KeysMissing(_))
+        ));
+        assert!(matches!(load_keys_with(&root, false), Ok(Keys::Unchecked)));
     }
 }
