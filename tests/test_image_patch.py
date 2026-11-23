@@ -50,8 +50,8 @@ if os.environ.get("NO_GRUB"):
     GRUB = ""
 if os.environ.get("GRUB_WITHOUT_CUSTOM"):
     GRUB = GRUB.replace("custom.cfg", "other.cfg")
-GROUP = "root:x:0:\nlpadmin:x:113:icpcadmin,contestant\ncontestant:x:1004:\n"
-GSHADOW = "root:*::\nlpadmin:!::icpcadmin,contestant\ncontestant:!::\n"
+GROUP = "root:x:0:\nlpadmin:x:113:admin,contestant\ncontestant:x:1004:\n"
+GSHADOW = "root:*::\nlpadmin:!::admin,contestant\ncontestant:!::\n"
 if os.environ.get("NO_GROUP"):
     GROUP = ""
 ORIGINALS = {"/boot/grub/grub.cfg": GRUB, "/etc/group": GROUP, "/etc/gshadow": GSHADOW}
@@ -190,7 +190,6 @@ class ImagePatchTests(unittest.TestCase):
         self.write_payload("etc/ck/image-version", b"test-image\n")
         self.write_payload("usr/local/bin/ck-recorder", b"#!/usr/bin/env bash\necho example\n")
         self.write_payload("usr/local/bin/ck-welcome", b"#!/usr/bin/env bash\necho example\n")
-        self.write_payload("icpc/scripts/set_wallpaper.sh", b"#!/bin/bash\necho example\n")
         # A program with bytes that text handling would damage: a Windows line ending and a NUL.
         self.agent = self.directory / "ck-agent"
         self.agent.write_bytes(b"\x7fELF\x02\x01\r\n\x00\xff end")
@@ -234,7 +233,6 @@ class ImagePatchTests(unittest.TestCase):
         commands = self.commands_file.read_text()
         self.assertIn("sif /usr/local/bin/ck-recorder mode 0100755\n", commands)
         self.assertIn("sif /usr/local/bin/ck-welcome mode 0100755\n", commands)
-        self.assertIn("sif /icpc/scripts/set_wallpaper.sh mode 0100755\n", commands)
         self.assertIn("sif /etc/ck/config.conf mode 0100644\n", commands)
         self.assertIn("sif /etc/ck/config.conf uid 0\n", commands)
         self.assertIn("sif /etc/ck/config.conf gid 0\n", commands)
@@ -463,43 +461,12 @@ class ImagePatchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("WRONG PERMISSIONS /boot/grub/grub.cfg", result.stdout)
 
-    def seed_reset_script(self, text):
-        path = "/icpc/scripts/deleteUser.sh"
-        self.state_file.write_text(json.dumps({
-            "files": {path: text},
-            "modes": {path: "0100755"},
-            "owners": {path: {"uid": "0", "gid": "0"}},
-        }))
-        return path
-
-    def test_reset_does_not_readd_the_contestant_to_lpadmin(self):
-        before = "#!/bin/bash\n# lpadmin is a CUPS administrator\n" + (
-            "useradd -d /home/contestant -m contestant -G lpadmin -s /bin/bash\n"
-            "echo 'unchanged reset logic'"
-        )
-        path = self.seed_reset_script(before)
-        for _ in range(2):
-            result = self.run_patch()
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        state = json.loads(self.state_file.read_text())
-        self.assertEqual(state["files"][path], before.replace(" -G lpadmin", ""))
-        self.assertEqual(state["modes"][path], "0100755")
-        self.assertEqual(state["owners"][path], {"uid": "0", "gid": "0"})
-
-    def test_refuses_an_unrecognized_reset_group_assignment_before_writing(self):
-        self.seed_reset_script("#!/bin/bash\nusermod -a -G lpadmin contestant\n")
-        result = self.run_patch()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unrecognized lpadmin reference", result.stderr)
-        self.assertFalse(self.commands_file.exists())
-
-
     def test_takes_the_contestant_out_of_lpadmin_and_keeps_everything_else(self):
         for _ in range(2):
             self.assertEqual(self.run_patch().returncode, 0)
         files = json.loads(self.state_file.read_text())["files"]
-        self.assertEqual(files["/etc/group"], "root:x:0:\nlpadmin:x:113:icpcadmin\ncontestant:x:1004:\n")
-        self.assertEqual(files["/etc/gshadow"], "root:*::\nlpadmin:!::icpcadmin\ncontestant:!::\n")
+        self.assertEqual(files["/etc/group"], "root:x:0:\nlpadmin:x:113:admin\ncontestant:x:1004:\n")
+        self.assertEqual(files["/etc/gshadow"], "root:*::\nlpadmin:!::admin\ncontestant:!::\n")
         commands = self.commands_file.read_text()
         self.assertIn("sif /etc/group mode 0100644\n", commands)
         self.assertIn("sif /etc/gshadow mode 0100640\n", commands)

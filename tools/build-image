@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
-# No Keeper parts yet: this only proves we can make a disk that boots without the ICPC image.
+# No Keeper parts yet: this only proves we can make a disk that boots on its own.
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3.
 # Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--config-public-keys FILE]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
@@ -101,7 +101,7 @@ fi
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
 export SOURCE_DATE_EPOCH
 
-# Helpers shared with the ICPC image patch: manifest reading, the agent check, file modes.
+# Helpers shared with the image patch: manifest reading, the agent check, file modes.
 # shellcheck source=../image/patch/lib/image-tools.sh
 # shellcheck source-path=SCRIPTDIR
 source "$REPO/image/patch/lib/image-tools.sh"
@@ -209,21 +209,19 @@ mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' 
   "$SUITE" "$MNT" "${APT_SOURCES[@]}"
 
 echo "== install the Keeper files"
-# The same files the ICPC image patch uses, minus what is ICPC-only: the /icpc folder (a wallpaper script)
-# and the manifest lines about ICPC's own screen recorder.
+# The same files the image patch uses.
 install_payload() {
   local source=$1 payload=$WORK/payload.$2 path
   prepare_payload "$source" "$payload"
   if [[ $2 == patch ]]; then
     add_agent_binary "$AGENT" "$payload"
-    rm -rf "$payload/icpc"
   fi
   find "$payload" -type d -exec chmod 0755 {} +
   find "$payload" -type f -exec chmod 0644 {} +
   while IFS= read -r path; do
     chmod "$(payload_file_mode "$path" | tail -c 5)" "$payload$path"
   done < <(list_payload_paths "$payload" f)
-  # Programs payload_file_mode does not know (it names the ICPC patch's own files).
+  # Programs payload_file_mode does not know (it names the patch's own files).
   if [[ -d $payload/usr/local/sbin ]]; then chmod 0755 "$payload"/usr/local/sbin/*; fi
   for f in ck-wallpaper ck-toolchains ck-refresh-connection ck-reset-screen; do if [[ -f $payload/usr/local/bin/$f ]]; then chmod 0755 "$payload/usr/local/bin/$f"; fi; done
   # Desktop launchers must be executable or xfdesktop asks the user whether to trust them.
@@ -266,11 +264,9 @@ chroot "$MNT" chown proxy:proxy /etc/squid/acl_allowed_domains.txt
 # Masked services are linked to /dev/null; removed files are deleted.
 mkdir -p "$MNT/etc/systemd/system"
 while IFS= read -r unit; do
-  [[ $unit == icpc-* ]] && continue
   ln -sfn /dev/null "$MNT/etc/systemd/system/$unit"
 done < <(read_manifest "$REPO/image/patch/mask-units.txt")
 while IFS= read -r path; do
-  [[ $path == /icpc/* ]] && continue
   rm -f "$MNT$path"
 done < <(read_manifest "$REPO/image/patch/remove-files.txt")
 
@@ -423,7 +419,7 @@ cp "$MNT/boot/efi/EFI/BOOT/grub.cfg" "$MNT/boot/efi/boot/grub/grub.cfg"
 chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot "$LOOP"
 chroot "$MNT" update-grub
 # custom.cfg sets a superuser nobody can log in as (locks editing and recovery). That closes the normal
-# boot too unless every top-level entry is --unrestricted, so mark them, as the ICPC patch does.
+# boot too unless every top-level entry is --unrestricted, so mark them, as the image patch does.
 if ! grep -q 'custom\.cfg' "$MNT/boot/grub/grub.cfg" || ! grep -q '^menuentry ' "$MNT/boot/grub/grub.cfg"; then
   echo "ERROR: grub.cfg does not read custom.cfg or has no menu entries; GRUB would stay unlocked" >&2
   exit 1
