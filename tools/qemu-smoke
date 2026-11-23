@@ -132,6 +132,7 @@ run_checks() {
     'echo CK48_thunderbolt_$(modprobe -n -v thunderbolt 2>&1 | grep -c "/bin/false")'
     'echo CK49_homes_$(stat -c %a /home/contestant /home/ckadmin | tr -s "
 " "_")$(runuser -u contestant -- ls /home/ckadmin >/dev/null 2>&1 && echo readable || echo denied)'
+    'rm -f /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; a=$?; ck-reset-allow >/dev/null; PAM_USER=ckreset ck-screen pam; b=$?; touch -d "90 seconds ago" /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; d=$?; touch -d "5 minutes ago" /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; c=$?; rm -f /run/ck-reset-allowed; echo CK50_resetlogin_${a}_${b}_${d}_$c'
     'test -x /usr/bin/nm-applet && test -f /etc/xdg/autostart/nm-applet.desktop && grep -q systray /etc/xdg/xfce4/panel/default.xml && echo CK10_network_menu_ok'
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
@@ -202,6 +203,7 @@ run_checks() {
   expect 'CK47_udisks_absent_rule' 'udisks2 is not installed (nothing mounts disks for the contestant) and its polkit deny rule is in place'
   expect 'CK48_thunderbolt_1' 'the Thunderbolt driver cannot be loaded'
   expect 'CK49_homes_750_750_denied' 'home folders are 0750 and the contestant cannot read the admin home'
+  expect 'CK50_resetlogin_1_0_0_1' 'the reset login is refused unless the organizer allowed it with ck-reset-allow, and only for two minutes'
   expect 'CK10_network_menu_ok' 'the network menu is installed, starts with the desktop and the panel has a notification area'
   expect 'CK11_groups_ok' 'the contestant is in none of sudo, adm, lpadmin, root'
   expect 'CK13_firefox_0' 'Firefox starts as the contestant (headless)'

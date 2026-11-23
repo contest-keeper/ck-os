@@ -322,7 +322,7 @@ last_change=$(date -u -d "@$SOURCE_DATE_EPOCH" +%F)
 chroot "$MNT" useradd --create-home --shell /bin/bash contestant
 chroot "$MNT" useradd --create-home --shell /bin/bash --groups sudo ckadmin
 # The reset login : no password, listed on the login screen, its session only starts
-# the reset (ck-reset-screen and polkit rule 52-ck-reset.rules). lightdm lets members of nopasswdlogin in without one.
+# the reset (ck-reset-screen and polkit rule 52-ck-reset.rules). lightdm lets members of nopasswdlogin in without one, but ck-screen pam only lets ckreset in after the organizer ran ck-reset-allow.
 if [[ $PROFILE == debian ]]; then
   configure_debian_lightdm "$MNT"
 fi

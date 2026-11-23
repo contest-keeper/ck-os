@@ -7,6 +7,7 @@ set -euo pipefail
 user=contestant
 uid=$(id -u "$user")
 
+rm -f /run/ck-reset-allowed
 loginctl terminate-user "$user" 2>/dev/null || true
 pkill -KILL -u "$user" 2>/dev/null || true
 for _ in $(seq 1 20); do
