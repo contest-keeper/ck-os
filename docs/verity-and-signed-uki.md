@@ -26,8 +26,7 @@ firmware checks, and the firmware only checks signatures against keys it holds.
   without an enrolled key only catches accidental corruption.
 - Legacy BIOS boots (which the smoke test covers) have no signature checking at all: verity there is decoration.
   The protection would exist for UEFI with Secure Boot only.
-- The Hub-side alternatives (the Hub checking what a stick runs) were considered and are not wanted (decisions: no
-  attestation). They are not part of this note.
+- Having the Hub check what a stick runs (remote attestation) is a different design and is not covered here.
 
 ## What would have to change in the image
 
@@ -52,8 +51,8 @@ firmware checks, and the firmware only checks signatures against keys it holds.
 
 ## Costs and risks
 
-- Large: a new disk layout, a new boot path, a key-custody process and enrolment on every laptop. Estimated a few
-  weeks of focused work plus the key process.
+- Large: a new disk layout, a new boot path, a key-custody process and enrolment on every laptop. No estimate
+  here; the first step (the layout change) would give one.
 - Per-laptop enrolment is the real cost for a contest: a stick that boots on a fresh machine shows the MOK
   screen once; without the organizer entering the password, the stick does not boot (it does not fall back to
   unprotected). This is a change to how a lab is prepared.
