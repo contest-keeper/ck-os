@@ -171,6 +171,9 @@ fn apply_config(root: &Root) -> ExitCode {
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
         }
+        if loaded.config.settings.block_usb_storage {
+            apply_usb_storage_rules();
+        }
         set_admin_password(loaded.config.settings.admin_password_hash.as_deref());
         if loaded.config.settings.wifi.is_some() {
             reload_network_connections();
@@ -204,6 +207,24 @@ fn set_admin_password(hash: Option<&str>) {
 
 /// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not
 /// kept across reboots on every machine. A machine without the tool or a radio is not an error.
+/// Makes udev read the rules `apply-config` wrote and run them on the devices that are already there.
+fn apply_usb_storage_rules() {
+    for arguments in [
+        &["control", "--reload"][..],
+        &["trigger", "--subsystem-match=usb", "--action=add"][..],
+    ] {
+        match std::process::Command::new("udevadm")
+            .args(arguments)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => tracing::warn!("udevadm {} failed ({status})", arguments[0]),
+            Err(error) => tracing::warn!("cannot run udevadm, USB storage is not blocked: {error}"),
+        }
+    }
+    tracing::info!("USB storage blocked, except the stick itself");
+}
+
 fn block_bluetooth() {
     match std::process::Command::new("rfkill")
         .args(["block", "bluetooth"])

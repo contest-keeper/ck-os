@@ -8,6 +8,7 @@ use ck_protocol::{Settings, StickConfig, UploadMode, Wifi};
 use crate::error::Error;
 use crate::load::Loaded;
 use crate::root::Root;
+use crate::usb_storage::{BLOCK_USB_STORAGE, RULES as USB_STORAGE_RULES, boot_usb_devices, rules};
 
 const CONFIG_COPY: &str = "/etc/ck/config.json";
 const CONFIG_HASH: &str = "/etc/ck/config.sha256";
@@ -69,6 +70,14 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         remove(root, BLOCK_BLUETOOTH)?;
     }
 
+    if settings.block_usb_storage {
+        write(root, BLOCK_USB_STORAGE, b"1\n", 0o644)?;
+        let keep = boot_usb_devices(root);
+        write(root, USB_STORAGE_RULES, rules(&keep).as_bytes(), 0o644)?;
+    } else {
+        remove(root, BLOCK_USB_STORAGE)?;
+        remove(root, USB_STORAGE_RULES)?;
+    }
     match &settings.wifi {
         Some(wifi) => write(
             root,
