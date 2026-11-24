@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs once the clock is set (time-sync.target). A stick whose clock was wrong at boot, for example with a
+# flat clock battery, made its CA at the wrong time: once the real time is known the CA may be expired or about
+# to expire. Then it is replaced and Squid restarts to use it. Does nothing when the CA is fine.
+set -eu
+if openssl x509 -checkend 604800 -noout -in /etc/ck/squid-ca/ca.crt >/dev/null 2>&1; then
+  exit 0
+fi
+/usr/local/sbin/ck-squid-ca
+systemctl restart squid.service

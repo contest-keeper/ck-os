@@ -168,6 +168,7 @@ run_checks() {
     'for i in $(seq 60); do pgrep -u contestant -x xfce4-session >/dev/null && break; sleep 2; done; echo CK38_after_$(ls /home/contestant/Desktop/junk-by-contestant /home/contestant/.junk-by-contestant 2>/dev/null | wc -l)_junk_launchers_$(ls /home/contestant/Desktop | wc -l)_session_$(pgrep -u contestant -c -x xfce4-session)_uid_$([ "$(id -u contestant)" = "$uid0" ] && echo same)'
     'echo CK55_ca_$(openssl x509 -checkend 6048000 -noout -in /etc/ck/squid-ca/ca.crt >/dev/null; echo $?)_$(openssl x509 -checkend 4320000 -noout -in /etc/ck/squid-ca/ca.crt >/dev/null; echo $?)'
     'f=/etc/ck/squid-ca; old=$(openssl x509 -in $f/ca.crt -noout -subject); openssl req -x509 -new -key $f/ca.key -days 1 -subj /CN=old-ca -out $f/ca.crt && /usr/local/sbin/ck-squid-ca >/dev/null 2>&1; new=$(openssl x509 -in $f/ca.crt -noout -subject); fp=$(openssl x509 -in $f/ca.crt -noout -fingerprint -sha256 | cut -d= -f2); echo CK56_regen_$([ "$new" != "$old" ] && echo changed)_$(openssl x509 -checkend 4320000 -noout -in $f/ca.crt >/dev/null; echo $?)_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -c "$fp")_$(cmp -s $f/ca.crt /usr/local/share/ca-certificates/ck-squid-ca.crt && echo trusted)'
+    'f=/etc/ck/squid-ca; old=$(openssl x509 -in $f/ca.crt -noout -subject); openssl req -x509 -new -key $f/ca.key -days 1 -subj /CN=expired-ca -out $f/ca.crt; systemctl start ck-squid-ca-renew.service; echo CK57_renew_$([ "$(openssl x509 -in $f/ca.crt -noout -subject)" != "$old" ] && echo changed)_$(systemctl is-active squid.service)_$(systemctl is-enabled ck-squid-ca-renew.service)'
     'echo CK_$((1+1))_DONE'
   )
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
@@ -260,6 +261,7 @@ run_checks() {
   expect 'CK38_after_0_junk_launchers_5_session_1_uid_same' 'after the reset the contestant'"'"'s files are gone, the Desktop is back to the five launchers, the same uid, and the desktop session came back by itself'
   expect 'CK55_ca_1_0' 'this stick'"'"'s CA lasts between 50 and 70 days'
   expect 'CK56_regen_changed_0_1_trusted' 'a CA that is about to expire is replaced at boot, trusted by the system and in the Java store'
+  expect 'CK57_renew_changed_active_enabled' 'once the clock is set, a CA that is expired or about to expire is replaced and Squid restarts with it'
   expect 'CK18_java_store_1' 'the Java certificate store was made at first boot and holds the stick'"'"'s CA'
   expect 'CK12_sudo_1' 'sudo does not work for the contestant'
   return "$failed"
