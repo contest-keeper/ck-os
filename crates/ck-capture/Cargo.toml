@@ -16,4 +16,5 @@ thiserror = "2.0.21"
 tracing = "0.1.44"
 
 [dev-dependencies]
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 tempfile = "3.27.0"
