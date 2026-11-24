@@ -116,6 +116,10 @@ fn applied(root: &Path) -> Applied {
         wallpaper_is_team_wallpaper: wallpaper_matches(root),
         bluetooth_block_requested: root.join("etc/ck/block-bluetooth").exists(),
         bluetooth_blocked: bluetooth_blocked(root),
+        usb_storage_block_requested: root.join("etc/ck/block-usb-storage").exists(),
+        usb_storage_blocked: ck_agent_config::usb_storage_blocked(&ck_agent_config::Root::new(
+            root,
+        )),
         wifi_ssid: wifi_ssid(root),
         wifi_profile_private: wifi_profile_private(root),
     }

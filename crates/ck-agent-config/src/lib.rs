@@ -9,6 +9,7 @@ mod error;
 mod load;
 mod root;
 mod trust;
+mod usb_storage;
 
 pub use apply::{BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics};
 pub use branding::apply_branding;
@@ -17,3 +18,4 @@ pub use error::Error;
 pub use load::{Loaded, load};
 pub use root::Root;
 pub use trust::{Booted, TRUST_MARKER, Trust, load_for_boot, load_last_good, write_trust};
+pub use usb_storage::{BLOCK_USB_STORAGE, boot_usb_devices, usb_storage_blocked};

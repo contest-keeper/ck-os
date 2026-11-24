@@ -46,6 +46,11 @@ pub struct Applied {
     /// What the kernel says about the Bluetooth radios (`/sys/class/rfkill`): `Some(true)` when
     /// every one is soft or hard blocked, `None` when the machine has none (a VM, usually).
     pub bluetooth_blocked: Option<bool>,
+    /// `/etc/ck/block-usb-storage` exists: the agent was told to block USB mass storage.
+    pub usb_storage_block_requested: bool,
+    /// Whether every USB mass-storage interface other than the stick's own is switched off, from
+    /// `/sys/bus/usb/devices`. `None` when there is none to judge.
+    pub usb_storage_blocked: Option<bool>,
     /// The network name in the `ck-wifi` `NetworkManager` connection. The password is never read.
     pub wifi_ssid: Option<String>,
     /// The connection file is readable by root only (mode 0600). `None` where modes do not exist.

@@ -1,7 +1,7 @@
 //! Compares what the machine reported with what the stick's own settings say should happen.
 
 use ck_protocol::{Settings, StickId, render_computer_name};
-use ck_selftest::Report;
+use ck_selftest::{Applied, Report};
 
 pub struct ExpectedConfig {
     pub stick_id: StickId,
@@ -17,6 +17,23 @@ impl ExpectedConfig {
             &self.settings.site,
             self.machine_number.unwrap_or(1),
         )
+    }
+}
+
+fn device_blocks(problems: &mut Vec<String>, settings: &Settings, applied: &Applied) {
+    if applied.bluetooth_block_requested != settings.block_bluetooth {
+        problems.push("the Bluetooth block does not match the settings".to_owned());
+    }
+    if settings.block_bluetooth && applied.bluetooth_blocked == Some(false) {
+        problems.push("a Bluetooth radio is not blocked".to_owned());
+    }
+    if applied.usb_storage_block_requested != settings.block_usb_storage {
+        problems.push("the USB storage block does not match the settings".to_owned());
+    }
+    if settings.block_usb_storage && applied.usb_storage_blocked != Some(true) {
+        problems.push(
+            "the USB storage device of the test machine is not shown to be blocked".to_owned(),
+        );
     }
 }
 
@@ -102,12 +119,7 @@ pub fn problems(config: &ExpectedConfig, report: &Report) -> Vec<String> {
     if branding.wallpaper.is_some() && applied.wallpaper_is_team_wallpaper != Some(true) {
         problems.push("the wallpaper on the stick is not the machine's team wallpaper".to_owned());
     }
-    if applied.bluetooth_block_requested != settings.block_bluetooth {
-        problems.push("the Bluetooth block does not match the settings".to_owned());
-    }
-    if settings.block_bluetooth && applied.bluetooth_blocked == Some(false) {
-        problems.push("a Bluetooth radio is not blocked".to_owned());
-    }
+    device_blocks(&mut problems, settings, applied);
     let wanted_ssid = settings.wifi.as_ref().map(|wifi| wifi.ssid.as_str());
     if applied.wifi_ssid.as_deref() != wanted_ssid {
         problems.push(format!(
@@ -199,7 +211,7 @@ fn normalized_sites(sites: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use ck_protocol::RecordingMode;
-    use ck_selftest::{Applied, UnitState};
+    use ck_selftest::UnitState;
 
     use super::*;
 
@@ -332,6 +344,30 @@ mod tests {
             "a radio left on"
         );
         report.applied.bluetooth_blocked = Some(true);
+        assert_eq!(problems(&settings_on, &report), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_usb_storage_block_is_checked_against_the_settings() {
+        let mut settings_on = config();
+        settings_on.settings.block_usb_storage = true;
+        let mut report = good_report();
+        assert!(
+            !problems(&settings_on, &report).is_empty(),
+            "block asked, not applied"
+        );
+
+        report.applied.usb_storage_block_requested = true;
+        assert!(
+            !problems(&settings_on, &report).is_empty(),
+            "no device seen is not a block"
+        );
+        report.applied.usb_storage_blocked = Some(false);
+        assert!(
+            !problems(&settings_on, &report).is_empty(),
+            "a device left on"
+        );
+        report.applied.usb_storage_blocked = Some(true);
         assert_eq!(problems(&settings_on, &report), Vec::<String>::new());
     }
 

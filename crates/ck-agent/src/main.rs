@@ -171,6 +171,9 @@ fn apply_config(root: &Root) -> ExitCode {
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
         }
+        if loaded.config.settings.block_usb_storage {
+            apply_usb_storage_rules();
+        }
         set_admin_password(loaded.config.settings.admin_password_hash.as_deref());
         if loaded.config.settings.wifi.is_some() {
             reload_network_connections();
@@ -199,6 +202,42 @@ fn set_admin_password(hash: Option<&str>) {
         Err(error) => {
             tracing::error!("cannot set the admin password, the account stays locked: {error}");
         }
+    }
+}
+
+/// Makes udev read the rules `apply-config` wrote and run them on the devices that are already there.
+fn apply_usb_storage_rules() {
+    let mut activated = true;
+    for arguments in [
+        &["control", "--reload"][..],
+        &["trigger", "--subsystem-match=usb", "--action=add"][..],
+        &["settle", "--timeout=20"][..],
+    ] {
+        match std::process::Command::new("udevadm")
+            .args(arguments)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                activated = false;
+                tracing::warn!("udevadm {} failed ({status})", arguments[0]);
+            }
+            Err(error) => {
+                activated = false;
+                tracing::warn!("cannot run udevadm, USB storage is not blocked: {error}");
+            }
+        }
+        // Without a running udev the later steps would only wait for events that never come.
+        if !activated {
+            break;
+        }
+        // Without a running udev the later steps would only wait for events that never come.
+        if !activated {
+            break;
+        }
+    }
+    if activated {
+        tracing::info!("USB storage blocked, except the stick itself");
     }
 }
 
