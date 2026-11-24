@@ -281,6 +281,7 @@ LABEL=CKROOT / ext4 noatime,errors=remount-ro 0 1
 LABEL=EFI /boot/efi vfat umask=0077 0 1
 /tmp /tmp none bind,nosuid,nodev 0 0
 /home /home none bind,nosuid,nodev 0 0
+/var/tmp /var/tmp none bind,nosuid,nodev 0 0
 PARTLABEL=CKCONFIG /ck-config vfat noauto,nofail,ro,uid=0,gid=0,umask=0077,nosuid,nodev,noexec,x-systemd.device-timeout=30s 0 0
 EOF
 install -d -m 0700 "$MNT/ck-config"

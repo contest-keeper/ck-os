@@ -26,7 +26,7 @@ what to block, how, and how we test it as `contestant`.
 Assume the contestant can run any program as an unprivileged user: the IDEs start programs through `xterm` (Run),
 and compilers and the contest languages are installed, so any shell-level trick that works without root works here.
 The list therefore does not rely on hiding the shell. It relies on what an unprivileged user cannot change: the
-network lock (not matched by a user), the polkit rules, root-owned files and `0750` homes. `/tmp` and `/home`
+network lock (not matched by a user), the polkit rules, root-owned files and `0750` homes. `/tmp`, `/var/tmp` and `/home`
 are mounted `nosuid,nodev`, so a program written there cannot gain a set-user-id bit or open a device node it
 made; they are not `noexec`, because compiled solutions run from there.
 
