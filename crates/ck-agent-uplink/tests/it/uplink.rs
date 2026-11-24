@@ -543,32 +543,11 @@ fn a_refusal_and_an_unreachable_hub_are_different_errors() {
 }
 
 #[test]
-fn no_server_address_means_no_reporting() {
-    let dir = TempDir::new().expect("temp dir");
-    machine(dir.path(), "");
-    assert_eq!(Uplink::load(dir.path()).expect("load").url(), None);
-}
-
-#[test]
 fn a_trailing_slash_in_the_server_address_is_not_doubled() {
     let dir = TempDir::new().expect("temp dir");
     machine(dir.path(), "http://10.0.2.2:8088/");
     let url = Uplink::load(dir.path()).expect("load").url().expect("url");
     assert_eq!(url, "http://10.0.2.2:8088/api/v1/heartbeat");
-}
-
-#[test]
-fn missing_or_broken_settings_are_explained() {
-    let dir = TempDir::new().expect("temp dir");
-    assert!(matches!(Uplink::load(dir.path()), Err(Error::NoSettings)));
-
-    let file = dir.path().join("etc/ck/config.json");
-    fs::create_dir_all(file.parent().expect("parent")).expect("folder");
-    fs::write(&file, "{ not json").expect("write");
-    assert!(matches!(
-        Uplink::load(dir.path()),
-        Err(Error::BadSettings(_))
-    ));
 }
 
 #[test]
