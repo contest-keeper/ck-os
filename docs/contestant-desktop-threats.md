@@ -21,5 +21,14 @@ what to block, how, and how we test it as `contestant`.
 | 14 | Persistence across reset (cron, autostart, `~/.config`) | Reset recreates `contestant` from template (#16); no cron for the user | After reset, home matches template |
 | 15 | Screen lock bypass and sleep | Lock screen only via Hub command (#1); screensaver passwordless guard decided with lane B | Manual lock unavailable or agent-controlled |
 
+## What the contestant can run
+
+Assume the contestant can run any program as an unprivileged user: the IDEs start programs through `xterm` (Run),
+and compilers and the contest languages are installed, so any shell-level trick that works without root works here.
+The list therefore does not rely on hiding the shell. It relies on what an unprivileged user cannot change: the
+network lock (not matched by a user), the polkit rules, root-owned files and `0750` homes. `/tmp`, `/var/tmp` and `/home`
+are mounted `nosuid,nodev`, so a program written there cannot gain a set-user-id bit or open a device node it
+made; they are not `noexec`, because compiled solutions run from there.
+
 Open decisions that affect this list: ICAP fail-open or fail-closed (#39), whether the IDE embedded terminal can
 be disabled per IDE (VS Code `terminal.integrated` policy).
