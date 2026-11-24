@@ -307,6 +307,9 @@ Encapsulated: {encapsulated}
 }
 
 #[cfg(test)]
+mod hostile_input;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
