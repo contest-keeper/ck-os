@@ -4,7 +4,7 @@
 # known the CA may be expired or about to expire. Then it is replaced and Squid restarts to use it. Does nothing
 # when the CA is fine, or while the clock has not been set (timesyncd has not reached a server yet).
 set -eu
-if [ "$(timedatectl show -p NTPSynchronized --value)" != yes ]; then
+if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" != yes ]; then
   exit 0
 fi
 if openssl x509 -checkend 604800 -noout -in /etc/ck/squid-ca/ca.crt >/dev/null 2>&1; then
