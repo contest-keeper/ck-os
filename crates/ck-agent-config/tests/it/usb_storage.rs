@@ -10,7 +10,7 @@ const SETTINGS: &str = r#"{
     "team": "Team A", "site": "Lab 1", "allowed_domains": ["example.org"]
 }"#;
 
-const RULES: &str = "etc/udev/rules.d/60-ck-block-usb-storage.rules";
+const RULES: &str = "run/udev/rules.d/60-ck-block-usb-storage.rules";
 
 fn machine(settings: &str) -> (TempDir, Root) {
     let dir = TempDir::new().expect("temp dir");
@@ -76,6 +76,13 @@ fn the_stick_keeps_its_own_interface_and_every_other_storage_interface_is_switch
     assert!(lines[1].contains(r#"ATTR{authorized}="0""#), "{rules}");
     assert!(!lines[1].contains("GOTO"));
     assert_eq!(lines[2], r#"LABEL="ck_usb_storage_end""#);
+    // tools/qemu-smoke tries this same rule on a USB disk in a virtual machine (check CK59).
+    let smoke = include_str!("../../../../tools/qemu-smoke");
+    assert!(
+        smoke.contains(&lines[1].replace('"', "\\\"")),
+        "tools/qemu-smoke does not use the blocking rule: {}",
+        lines[1]
+    );
 
     // The next boot has settings without the block: the old rules must not stay behind.
     fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
@@ -124,4 +131,17 @@ fn the_report_says_whether_the_other_storage_interfaces_are_off() {
     assert_eq!(usb_storage_blocked(&root), Some(true));
     storage_interface(dir.path(), "1-4:1.0", "1\n");
     assert_eq!(usb_storage_blocked(&root), Some(false));
+
+    fs::remove_file(dir.path().join("sys/bus/usb/devices/1-4:1.0/authorized")).expect("remove");
+    storage_interface(dir.path(), "1-4:1.0", "0\n");
+    fs::remove_file(
+        dir.path()
+            .join("sys/bus/usb/devices/1-4:1.0/bInterfaceClass"),
+    )
+    .expect("remove");
+    assert_eq!(
+        usb_storage_blocked(&root),
+        Some(false),
+        "an interface that cannot be read is not shown to be blocked"
+    );
 }

@@ -52,6 +52,11 @@ impl Machine {
         fs::copy(&options.vars_template, &vars).map_err(io("copying the firmware variables"))?;
         let code = options.work.join("OVMF_CODE.fd");
         fs::copy(&options.firmware, &code).map_err(io("copying the firmware"))?;
+        // A second disk on USB, so a settings check on USB storage has a device to look at.
+        let usb_disk = options.work.join("usb-disk.img");
+        File::create(&usb_disk)
+            .and_then(|file| file.set_len(8 * 1024 * 1024))
+            .map_err(io("creating the USB test disk"))?;
         let serial_log = options.work.join("serial.log");
         let qmp_port = free_port()?;
 
@@ -77,7 +82,13 @@ impl Machine {
                 "file={},format=raw,if=none,id=d0,snapshot=on,cache=unsafe,aio=threads",
                 options.image.display()
             ))
+            .arg("-drive")
+            .arg(format!(
+                "file={},format=raw,if=none,id=usb0",
+                usb_disk.display()
+            ))
             .args(["-device", "virtio-blk-pci,drive=d0", "-device", "qemu-xhci"])
+            .args(["-device", "usb-storage,drive=usb0"])
             .args([
                 "-device",
                 "usb-tablet",

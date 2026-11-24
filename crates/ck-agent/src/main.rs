@@ -209,6 +209,7 @@ fn set_admin_password(hash: Option<&str>) {
 /// kept across reboots on every machine. A machine without the tool or a radio is not an error.
 /// Makes udev read the rules `apply-config` wrote and run them on the devices that are already there.
 fn apply_usb_storage_rules() {
+    let mut activated = true;
     for arguments in [
         &["control", "--reload"][..],
         &["trigger", "--subsystem-match=usb", "--action=add"][..],
@@ -218,11 +219,19 @@ fn apply_usb_storage_rules() {
             .status()
         {
             Ok(status) if status.success() => {}
-            Ok(status) => tracing::warn!("udevadm {} failed ({status})", arguments[0]),
-            Err(error) => tracing::warn!("cannot run udevadm, USB storage is not blocked: {error}"),
+            Ok(status) => {
+                activated = false;
+                tracing::warn!("udevadm {} failed ({status})", arguments[0]);
+            }
+            Err(error) => {
+                activated = false;
+                tracing::warn!("cannot run udevadm, USB storage is not blocked: {error}");
+            }
         }
     }
-    tracing::info!("USB storage blocked, except the stick itself");
+    if activated {
+        tracing::info!("USB storage blocked, except the stick itself");
+    }
 }
 
 fn block_bluetooth() {

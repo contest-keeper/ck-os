@@ -30,8 +30,10 @@ fn device_blocks(problems: &mut Vec<String>, settings: &Settings, applied: &Appl
     if applied.usb_storage_block_requested != settings.block_usb_storage {
         problems.push("the USB storage block does not match the settings".to_owned());
     }
-    if settings.block_usb_storage && applied.usb_storage_blocked == Some(false) {
-        problems.push("a USB storage device is not blocked".to_owned());
+    if settings.block_usb_storage && applied.usb_storage_blocked != Some(true) {
+        problems.push(
+            "the USB storage device of the test machine is not shown to be blocked".to_owned(),
+        );
     }
 }
 
@@ -357,8 +359,8 @@ mod tests {
 
         report.applied.usb_storage_block_requested = true;
         assert!(
-            problems(&settings_on, &report).is_empty(),
-            "no device in the VM is fine"
+            !problems(&settings_on, &report).is_empty(),
+            "no device seen is not a block"
         );
         report.applied.usb_storage_blocked = Some(false);
         assert!(

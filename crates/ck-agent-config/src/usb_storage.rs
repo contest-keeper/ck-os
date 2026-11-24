@@ -11,7 +11,9 @@ use crate::root::Root;
 
 /// Exists while the settings ask for USB mass storage to be blocked. The self-test reads it back.
 pub const BLOCK_USB_STORAGE: &str = "/etc/ck/block-usb-storage";
-pub(crate) const RULES: &str = "/etc/udev/rules.d/60-ck-block-usb-storage.rules";
+/// Under `/run`, so a rule never outlives the boot it was made for: udev's first run at the next boot cannot
+/// switch off the stick's own disk before the agent has worked out which device that is.
+pub(crate) const RULES: &str = "/run/udev/rules.d/60-ck-block-usb-storage.rules";
 
 /// The USB devices (such as `1-2`) that the root filesystem sits behind, read from the kernel's link
 /// from the root disk to its place in `/sys`. Empty when the root is not on USB (a virtual disk).
@@ -66,17 +68,25 @@ pub(crate) fn rules(keep: &[String]) -> String {
 }
 
 /// Whether every mass-storage interface that is not the stick's own is switched off, from the kernel's own
-/// files. `None` when there is none to judge.
+/// files. `None` when there is none to judge; an interface that cannot be read counts as not blocked.
 pub fn usb_storage_blocked(root: &Root) -> Option<bool> {
     let keep = boot_usb_devices(root);
     let entries = fs::read_dir(root.path("/sys/bus/usb/devices")).ok()?;
     let (mut found, mut all_blocked) = (false, true);
-    for entry in entries.flatten() {
+    for entry in entries {
+        // What cannot be read is not shown to be harmless.
+        let Ok(entry) = entry else {
+            (found, all_blocked) = (true, false);
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some((device, _)) = name.split_once(':') else {
             continue;
         };
-        let class = fs::read_to_string(entry.path().join("bInterfaceClass")).unwrap_or_default();
+        let Ok(class) = fs::read_to_string(entry.path().join("bInterfaceClass")) else {
+            (found, all_blocked) = (true, false);
+            continue;
+        };
         if class.trim() != "08" || keep.iter().any(|kept| kept == device) {
             continue;
         }
