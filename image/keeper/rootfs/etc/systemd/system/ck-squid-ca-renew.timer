@@ -1,0 +1,9 @@
+[Unit]
+Description=Keeper OS: look at the Squid CA once the clock is set, and again from time to time
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=15min
+
+[Install]
+WantedBy=timers.target
