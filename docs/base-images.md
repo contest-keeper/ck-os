@@ -39,6 +39,23 @@ sudo tools/build-image --out build [--size 8G] [--debug-login] [--serial-console
 Outputs in `--out`: `keeper-os-<version>.img`, `.img.zst` with `.sha256`, `keeper-os-<version>.packages.txt`
 (every installed package and version) and `keeper-os-<version>.rootfs.sha256` (see below).
 
+### Two ways to build it
+
+**CI (the image that is published).** `.github/workflows/keeper-image.yml` builds the static agent, runs
+`tools/build-image` with `--config-public-keys tools/ci-test-config-keys --serial-console`, and boots the result
+in UEFI, Secure Boot and BIOS with `tools/qemu-smoke ... all`. That smoke image carries a CI test key and a serial
+console, so it is never published. When publishing is enabled (variable `CK_IMAGE_PUBLISH_ENABLED`) or the run is
+for a release tag, the workflow builds the image again with the Hub's public keys from the variable
+`CK_CONFIG_PUBLIC_KEYS` (the build fails without them or with the CI test key). It always checks the files and
+the Hub manifest with `tools/publish-image`, and uploads them only when `CK_IMAGE_PUBLISH_ENABLED` is `true`. The
+Hub serves that image and Forge writes it to sticks.
+
+**Local, for developers.** Run `tools/build-image` in WSL2 or on Linux as above. `--agent FILE` names the agent
+(default `dist/ck-agent`), `--config-public-keys FILE` the keys that sign stick settings (a release agent refuses
+to apply settings without them; use `tools/ci-test-config-keys` for tests), `--debug-login` gives root an empty
+password and `--serial-console` adds the serial console, both only for `tools/qemu-smoke IMAGE checks`. Do not
+dispatch the CI workflow to test a change: it can publish. Build and boot locally.
+
 ### Pinned packages
 
 Packages come from `https://snapshot.ubuntu.com/ubuntu/<CK_SNAPSHOT>` with the suites `noble`, `noble-updates` and
