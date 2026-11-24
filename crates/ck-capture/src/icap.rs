@@ -276,32 +276,15 @@ fn echo(request: &IcapRequest) -> Vec<u8> {
     };
     parts.push(format!("{body}={offset}"));
     let encapsulated = parts.join(", ");
-    let mut reply = format!(
-        "ICAP/1.0 200 OK
-ISTag: {ISTAG}
-Encapsulated: {encapsulated}
-
-"
-    )
-    .into_bytes();
+    let mut reply =
+        format!("ICAP/1.0 200 OK\r\nISTag: {ISTAG}\r\nEncapsulated: {encapsulated}\r\n\r\n")
+            .into_bytes();
     reply.extend_from_slice(req_head);
     reply.extend_from_slice(&request.res_head);
     if !request.body.is_empty() {
-        reply.extend_from_slice(
-            format!(
-                "{:x}
-",
-                request.body.len()
-            )
-            .as_bytes(),
-        );
+        reply.extend_from_slice(format!("{:x}\r\n", request.body.len()).as_bytes());
         reply.extend_from_slice(&request.body);
-        reply.extend_from_slice(
-            b"
-0
-
-",
-        );
+        reply.extend_from_slice(b"\r\n0\r\n\r\n");
     }
     reply
 }
@@ -419,6 +402,24 @@ mod tests {
         assert!(text.starts_with("ICAP/1.0 200 OK"));
         assert!(text.contains("Encapsulated: req-hdr=0, null-body=4"));
         assert!(text.ends_with("GET\n"));
+    }
+
+    #[test]
+    fn an_echo_is_framed_with_carriage_returns_like_every_other_icap_line() {
+        let head = "POST /a HTTP/1.1\r\n\r\n";
+        let mut request = parse(&format!(
+            "REQMOD x ICAP/1.0\r\nEncapsulated: req-hdr=0, req-body={}\r\n\r\n{head}2\r\nhi\r\n0\r\n\r\n",
+            head.len()
+        ));
+        request.allow_204 = false;
+        request.preview = false;
+        let mut out = Vec::new();
+        write_unchanged(&mut out, &request).unwrap();
+        let expected = format!(
+            "ICAP/1.0 200 OK\r\nISTag: {ISTAG}\r\nEncapsulated: req-hdr=0, req-body={}\r\n\r\n{head}2\r\nhi\r\n0\r\n\r\n",
+            head.len()
+        );
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
     }
 
     #[test]
