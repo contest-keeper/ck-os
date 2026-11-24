@@ -44,10 +44,11 @@ Outputs in `--out`: `keeper-os-<version>.img`, `.img.zst` with `.sha256`, `keepe
 **CI (the image that is published).** `.github/workflows/keeper-image.yml` builds the static agent, runs
 `tools/build-image` with `--config-public-keys tools/ci-test-config-keys --serial-console`, and boots the result
 in UEFI, Secure Boot and BIOS with `tools/qemu-smoke ... all`. That smoke image carries a CI test key and a serial
-console, so it is never published. When publishing is enabled (variable `CK_IMAGE_PUBLISH_ENABLED`, or a release
-tag) the workflow builds the image again with the Hub's public keys from the variable `CK_CONFIG_PUBLIC_KEYS`
-(the build fails without them or with the CI test key), checks the files and the Hub manifest with
-`tools/publish-image` and uploads them. The Hub serves that image and Forge writes it to sticks.
+console, so it is never published. When publishing is enabled (variable `CK_IMAGE_PUBLISH_ENABLED`) or the run is
+for a release tag, the workflow builds the image again with the Hub's public keys from the variable
+`CK_CONFIG_PUBLIC_KEYS` (the build fails without them or with the CI test key). It always checks the files and
+the Hub manifest with `tools/publish-image`, and uploads them only when `CK_IMAGE_PUBLISH_ENABLED` is `true`. The
+Hub serves that image and Forge writes it to sticks.
 
 **Local, for developers.** Run `tools/build-image` in WSL2 or on Linux as above. `--agent FILE` names the agent
 (default `dist/ck-agent`), `--config-public-keys FILE` the keys that sign stick settings (a release agent refuses
