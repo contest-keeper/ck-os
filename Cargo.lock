@@ -249,7 +249,6 @@ dependencies = [
 name = "ck-vmtest"
 version = "0.1.0"
 dependencies = [
- "ck-agent-config",
  "ck-image",
  "ck-protocol",
  "ck-selftest",
