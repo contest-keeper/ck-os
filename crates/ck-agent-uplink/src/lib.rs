@@ -232,6 +232,8 @@ impl Uplink {
         // `proxy(None)`: the Hub is reached directly, whatever the session's proxy settings say.
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .proxy(None)
+            // An answer from somewhere else (a venue's login page) is not the Hub's answer.
+            .max_redirects(0)
             .timeout_global(Some(SEND_TIMEOUT))
             .build()
             .into();
@@ -242,12 +244,13 @@ impl Uplink {
             .content_type("application/json")
             .send(body);
         match result {
-            Ok(mut response) => response
+            Ok(mut response) if response.status().is_success() => response
                 .body_mut()
                 .with_config()
                 .limit(MAX_ANSWER_BYTES)
                 .read_to_vec()
                 .map_err(|e| Error::Unreachable(e.to_string())),
+            Ok(response) => Err(Error::Rejected(response.status().as_u16())),
             Err(ureq::Error::StatusCode(status)) => Err(Error::Rejected(status)),
             Err(other) => Err(Error::Unreachable(other.to_string())),
         }

@@ -721,6 +721,26 @@ fn a_failure_keeps_the_rest_in_order_and_a_later_flush_sends_them() {
 }
 
 #[test]
+fn an_answer_that_redirects_is_not_the_hubs_and_the_event_stays_queued() {
+    // A venue's login page answers with a redirect; the second answer would be a 200.
+    let hub = fake_hub(vec![307, 200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    push(&queue, &uplink, "ana");
+    let url = uplink.events_url().expect("url");
+
+    assert!(uplink.flush(&queue, &url).is_err());
+    assert_eq!(queue.pending().expect("pending").len(), 1, "not lost");
+    assert_eq!(
+        hub.requests.lock().expect("lock").len(),
+        1,
+        "the redirect was not followed"
+    );
+}
+
+#[test]
 fn an_event_the_hub_already_has_counts_as_sent_and_an_unreachable_hub_loses_nothing() {
     let hub = fake_hub(vec![409]);
     let dir = TempDir::new().expect("temp dir");
