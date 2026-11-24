@@ -6,7 +6,7 @@ members = ["crates/*"]
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/contest-keeper/ck-os"
-rust-version = "1.87"
+rust-version = "1.89"
 
 [workspace.dependencies]
 ck-crypto = { git = "https://github.com/contest-keeper/ck-protocol", rev = "f4796fe7f0546076f1013fb842f85af30dbfb05d", version = "0.1.0" }

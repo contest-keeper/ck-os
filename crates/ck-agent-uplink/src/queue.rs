@@ -22,6 +22,9 @@ pub const MAX_PENDING: usize = 10_000;
 pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
 
 const STATE_FILE: &str = "state.json";
+/// Held while an event is added. Capture, the uplink and the `enqueue` command each run in their own
+/// process and all call `push`, which reads the state, counts on and writes it back.
+const LOCK_FILE: &str = ".lock";
 
 #[derive(Default, Serialize, Deserialize)]
 struct State {
@@ -60,6 +63,8 @@ impl Queue {
                 "the payload is {size} bytes, at most {MAX_PAYLOAD_BYTES} are allowed"
             )));
         }
+        // Released when `_lock` goes out of scope, also on an early return.
+        let _lock = self.lock()?;
         if self.pending()?.len() >= MAX_PENDING {
             return Err(Error::Queue(format!(
                 "{MAX_PENDING} events are already waiting; the Hub has been unreachable for too long"
@@ -97,6 +102,20 @@ impl Queue {
             &serde_json::to_vec(&event).expect("an event always serializes"),
         )?;
         Ok(event)
+    }
+
+    /// Waits for the other processes that add events to be done. Each call opens its own handle, so
+    /// two `Queue` values in one process exclude each other as well.
+    fn lock(&self) -> Result<File, Error> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(LOCK_FILE))
+            .map_err(|e| queue_error("opening the queue lock", &e))?;
+        file.lock()
+            .map_err(|e| queue_error("locking the queue", &e))?;
+        Ok(file)
     }
 
     /// The waiting events, oldest first, each with the number of its file. A file that cannot be
