@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Build a generic, bootable stock Ubuntu 24.04 image (step 1 of docs/plan-keeper-os-from-stock-ubuntu.md).
-# No Keeper parts yet: this only proves we can make a disk that boots on its own.
+# Builds the Keeper OS disk image from stock Ubuntu 24.04 (see docs/base-images.md).
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--config-public-keys FILE]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
 # docs/base-images.md for what is and is not identical between two builds.
 set -euo pipefail
 
-# Each profile uses a dated archive for package reproducibility.
 # Fixed IDs so two builds do not differ in UUIDs (fixed values, not secrets).
 DISK_GUID=6b8a1c10-0000-4c4b-8000-000000000001
 ESP_GUID=6b8a1c10-0000-4c4b-8000-000000000002
