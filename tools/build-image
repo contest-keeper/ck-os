@@ -426,7 +426,7 @@ EOF
 chmod 0644 "$MNT/usr/share/doc/codium/copyright" "$MNT/usr/share/doc/firefox/copyright"
 # One network manager (NetworkManager): systemd-networkd would also configure the links, so it is masked.
 chroot "$MNT" systemctl mask systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
-chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service ck-squid-ca-renew.service
+chroot "$MNT" systemctl enable ck-grow-root.service NetworkManager.service ck-netlock.service ck-config.service ck-capture.service ck-uplink.service ck-selftest.service ck-recorder.service squid.service ck-squid-ca.service ck-squid-ca-renew.timer
 chroot "$MNT" systemctl enable ck-recording-upload.timer
 # UEFI with Secure Boot: Canonical's signed shim and signed GRUB, which trust the Canonical-signed kernel.
 # --removable also writes EFI/BOOT/BOOTX64.EFI so any UEFI machine and OVMF find it without NVRAM entries.
