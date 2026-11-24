@@ -10,7 +10,6 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-ck-agent-config = { path = "../ck-agent-config", version = "0.1.0" }
 ck-image.workspace = true
 ck-protocol.workspace = true
 ck-selftest = { path = "../ck-selftest", version = "0.1.0" }
