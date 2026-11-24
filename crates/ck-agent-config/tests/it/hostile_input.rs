@@ -7,7 +7,7 @@
 use std::fs;
 
 use ck_agent_config::{Error, Root, load};
-use ck_crypto::ConfigSigningKey;
+use ck_crypto::{ConfigSignature, ConfigSigningKey};
 use proptest::prelude::*;
 use tempfile::TempDir;
 
@@ -105,15 +105,25 @@ proptest! {
     }
 
     #[test]
-    fn a_signature_changed_in_any_byte_is_refused(index in any::<usize>(), flip in 1u8..=255) {
+    fn a_signature_that_says_something_else_is_refused(index in any::<usize>(), flip in 1u8..=255) {
         let key = ConfigSigningKey::generate();
         let (dir, root) = stick(Some(&key));
         put(&dir, "config.json", SETTINGS.as_bytes());
-        let mut signature = key.sign(SETTINGS.as_bytes()).to_file_text().into_bytes();
-        let index = index % signature.len();
-        signature[index] ^= flip;
-        put(&dir, "config.json.sig", &signature);
-        prop_assert!(load(&root).is_err());
+        let text = key.sign(SETTINGS.as_bytes()).to_file_text();
+        let mut changed = text.clone().into_bytes();
+        let index = index % changed.len();
+        changed[index] ^= flip;
+        put(&dir, "config.json.sig", &changed);
+
+        // Some changes leave the same signature: a tab for the space, a capital in the key id, the
+        // unused bits of the last base64 character. Those are still the Hub's signature.
+        let same_signature = std::str::from_utf8(&changed)
+            .ok()
+            .and_then(|text| ConfigSignature::parse(text).ok())
+            .is_some_and(|parsed| parsed.to_file_text() == text);
+        if !same_signature {
+            prop_assert!(load(&root).is_err());
+        }
     }
 }
 
