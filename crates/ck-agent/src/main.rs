@@ -205,19 +205,13 @@ fn set_admin_password(hash: Option<&str>) {
     }
 }
 
-/// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not
-/// kept across reboots on every machine. A machine without the tool or a radio is not an error.
 /// Makes udev read the rules `apply-config` wrote and run them on the devices that are already there.
 fn apply_usb_storage_rules() {
     let mut activated = true;
     for arguments in [
         &["control", "--reload"][..],
-        &[
-            "trigger",
-            "--subsystem-match=usb",
-            "--action=add",
-            "--settle",
-        ][..],
+        &["trigger", "--subsystem-match=usb", "--action=add"][..],
+        &["settle", "--timeout=20"][..],
     ] {
         match std::process::Command::new("udevadm")
             .args(arguments)
@@ -233,12 +227,22 @@ fn apply_usb_storage_rules() {
                 tracing::warn!("cannot run udevadm, USB storage is not blocked: {error}");
             }
         }
+        // Without a running udev the later steps would only wait for events that never come.
+        if !activated {
+            break;
+        }
+        // Without a running udev the later steps would only wait for events that never come.
+        if !activated {
+            break;
+        }
     }
     if activated {
         tracing::info!("USB storage blocked, except the stick itself");
     }
 }
 
+/// Switches Bluetooth off for this boot. It runs at every boot, because the radio's state is not
+/// kept across reboots on every machine. A machine without the tool or a radio is not an error.
 fn block_bluetooth() {
     match std::process::Command::new("rfkill")
         .args(["block", "bluetooth"])
