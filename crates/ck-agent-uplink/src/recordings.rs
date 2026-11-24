@@ -119,19 +119,34 @@ impl Uplink {
             // Keep the verified local copy, but out of the upload queue.
             drop(file);
             fs::create_dir_all(&uploaded)?;
-            let destination = uploaded.join(name);
-            if destination.try_exists()? {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "an uploaded recording already uses that name",
-                )
-                .into());
-            }
+            let destination = free_name(&uploaded, name)?;
             fs::rename(path.as_path(), destination)?;
             sent += 1;
         }
         Ok(sent)
     }
+}
+
+/// A recording the Hub already confirmed keeps its name; a later one with the same name gets a
+/// number, so one clash never stops the files after it from being uploaded.
+fn free_name(folder: &Path, name: &str) -> io::Result<PathBuf> {
+    let first = folder.join(name);
+    if !first.try_exists()? {
+        return Ok(first);
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    for number in 1_u32.. {
+        let candidate = folder.join(format!("{stem}-{number}.{extension}"));
+        if !candidate.try_exists()? {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("a free number is always found")
 }
 
 fn upload_due(mode: UploadMode, end: Option<LocalDateTime>) -> bool {
@@ -195,12 +210,17 @@ fn prune_expired(folder: &Path, days: u32, now: SystemTime) -> io::Result<()> {
     let maximum_age = Duration::from_secs(u64::from(days) * 86_400);
     for directory in directories {
         for path in closed_files(&directory)? {
-            let modified = fs::metadata(&path)?.modified()?;
+            let Ok(modified) = fs::metadata(&path).and_then(|meta| meta.modified()) else {
+                continue;
+            };
             if now
                 .duration_since(modified)
                 .is_ok_and(|age| age >= maximum_age)
             {
-                fs::remove_file(path)?;
+                match fs::remove_file(&path) {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                    _ => {}
+                }
             }
         }
     }

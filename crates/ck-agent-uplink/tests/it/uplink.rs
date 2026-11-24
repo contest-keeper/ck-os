@@ -310,6 +310,40 @@ fn recordings_resume_with_signed_requests_after_the_hub_fails() {
 }
 
 #[test]
+fn a_recording_whose_name_was_uploaded_before_is_kept_under_a_new_name() {
+    let hub = fake_hub_replies(vec![recording_reply(
+        200,
+        &json!({"id": RECORDING_ID, "chunk_size": 4, "next_chunk": 2, "complete": true}),
+    )]);
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    machine(root, &hub.base);
+    recording_settings(root, "during_contest", None, None);
+    let pending = root.join(PENDING);
+    let uploaded = root.join(RECORDINGS).join("uploaded/03c9f556");
+    fs::create_dir_all(&pending).expect("pending");
+    fs::create_dir_all(&uploaded).expect("uploaded");
+    fs::write(pending.join("screen-1.mkv"), b"abcdefg").expect("new");
+    fs::write(uploaded.join("screen-1.mkv"), b"older").expect("old");
+    assert_eq!(
+        Uplink::load(root)
+            .expect("load")
+            .upload_recordings()
+            .expect("upload"),
+        1
+    );
+    assert_eq!(
+        fs::read(uploaded.join("screen-1.mkv")).expect("old"),
+        b"older"
+    );
+    assert_eq!(
+        fs::read(uploaded.join("screen-1-1.mkv")).expect("new"),
+        b"abcdefg"
+    );
+    assert!(!pending.join("screen-1.mkv").exists());
+}
+
+#[test]
 fn recordings_respect_opt_in_and_clean_only_expired_closed_files() {
     let dir = TempDir::new().expect("temp dir");
     let root = dir.path();
