@@ -619,6 +619,53 @@ fn push(queue: &Queue, uplink: &Uplink, user: &str) -> ck_protocol::Event {
 }
 
 #[test]
+fn writers_adding_events_at_the_same_time_lose_none() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://127.0.0.1:1");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue_dir = dir.path().join("queue");
+    Queue::open(&queue_dir).expect("open");
+    let (stick, boot) = uplink.identity();
+    let (stick, boot) = (stick.clone(), boot.to_owned());
+
+    // Capture, the uplink and `enqueue` are separate processes, each with its own `Queue`.
+    let writers: Vec<_> = (0..8)
+        .map(|writer| {
+            let (stick, boot, queue_dir) = (stick.clone(), boot.clone(), queue_dir.clone());
+            thread::spawn(move || {
+                let queue = Queue::open(queue_dir).expect("open");
+                for n in 0..25 {
+                    queue
+                        .push(
+                            &stick,
+                            &boot,
+                            EventKind::Login,
+                            json!({ "writer": writer, "n": n }),
+                            time(),
+                        )
+                        .expect("push");
+                }
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.join().expect("writer");
+    }
+
+    let waiting = Queue::open(&queue_dir)
+        .expect("open")
+        .pending()
+        .expect("pending");
+    let mut seqs: Vec<u64> = waiting.iter().map(|(_, event)| event.seq).collect();
+    seqs.sort_unstable();
+    assert_eq!(
+        seqs,
+        (1..=200).collect::<Vec<u64>>(),
+        "no event lost or doubled"
+    );
+}
+
+#[test]
 fn queued_events_form_a_chain_that_carries_on_after_a_restart_and_starts_again_each_boot() {
     let dir = TempDir::new().expect("temp dir");
     machine(dir.path(), "http://127.0.0.1:1");
