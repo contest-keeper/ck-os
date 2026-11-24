@@ -1,11 +1,7 @@
 [Unit]
 Description=Keeper OS: replace the Squid CA if the clock showed it was made at the wrong time
-After=time-sync.target ck-squid-ca.service squid.service
-Wants=time-sync.target
+After=ck-squid-ca.service squid.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/ck-squid-ca-renew
-
-[Install]
-WantedBy=time-sync.target
