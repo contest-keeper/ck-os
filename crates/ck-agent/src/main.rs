@@ -212,7 +212,12 @@ fn apply_usb_storage_rules() {
     let mut activated = true;
     for arguments in [
         &["control", "--reload"][..],
-        &["trigger", "--subsystem-match=usb", "--action=add"][..],
+        &[
+            "trigger",
+            "--subsystem-match=usb",
+            "--action=add",
+            "--settle",
+        ][..],
     ] {
         match std::process::Command::new("udevadm")
             .args(arguments)
