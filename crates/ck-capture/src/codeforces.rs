@@ -41,6 +41,9 @@ struct Awaiting {
     user: Option<String>,
     /// Where the site sent the browser (the path), the only page that tells this submission's id.
     location: Option<String>,
+    /// The browser asked for that page after the redirect. A response to a request made earlier
+    /// may show an older list, so only this one is read for the id.
+    requested: bool,
     since: Instant,
 }
 
@@ -250,6 +253,13 @@ impl Rule for Codeforces {
             }
             self.pending.push(submission);
         }
+        if request.head.method == "GET"
+            && is_codeforces(&request.head)
+            && let Some(waiting) = &mut self.awaiting
+            && waiting.location.as_deref() == Some(request.head.path())
+        {
+            waiting.requested = true;
+        }
         outputs
     }
 
@@ -276,6 +286,7 @@ impl Rule for Codeforces {
                     sent,
                     user: self.user.clone(),
                     location: response.head.header("location").map(location_path),
+                    requested: false,
                     since: Instant::now(),
                 });
             } else {
@@ -289,7 +300,7 @@ impl Rule for Codeforces {
             && let Some(waiting) = &self.awaiting
         {
             // Only the page the site redirected to tells the id; any other page means it was missed.
-            let id = (waiting.location.as_deref() == Some(request.path()))
+            let id = (waiting.requested && waiting.location.as_deref() == Some(request.path()))
                 .then(|| {
                     newest_submission_id(&String::from_utf8_lossy(&response.body), &waiting.sent)
                 })
@@ -449,6 +460,7 @@ mod tests {
             NO_EVENTS
         );
         let (request, list) = my_page(&my_row(245_000_123, "/contest/2285/problem/B"));
+        follow(&mut rule, &request);
         let told = events(rule.on_response(&request, &list));
         assert_eq!(told.len(), 1);
         let event = &told[0];
@@ -490,6 +502,29 @@ mod tests {
         (request, response)
     }
 
+    /// The browser asks for the page the site redirected to.
+    fn follow(rule: &mut Codeforces, head: &Head) {
+        let request = Request {
+            head: head.clone(),
+            body: Vec::new(),
+            body_truncated: false,
+        };
+        let _ = rule.on_request(&request);
+    }
+
+    #[test]
+    fn an_answer_to_a_request_made_before_the_redirect_gives_no_id() {
+        let mut rule = Codeforces::new(false);
+        let (post, head) = submit("/contest/2285/problem/B", "x");
+        let _ = rule.on_request(&post);
+        let _ = rule.on_response(&head, &redirect("/contest/2285/my"));
+        // The page was asked for before the submit and answers only now, with an older list.
+        let (request, stale) = my_page(&my_row(5, "/contest/2285/problem/B"));
+        let told = events(rule.on_response(&request, &stale));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+    }
+
     #[test]
     fn the_id_of_another_problem_is_not_taken() {
         let mut rule = Codeforces::new(false);
@@ -497,6 +532,7 @@ mod tests {
         let _ = rule.on_request(&post);
         let _ = rule.on_response(&head, &redirect("/contest/2285/my"));
         let (request, list) = my_page(&my_row(9, "/contest/2285/problem/C"));
+        follow(&mut rule, &request);
         let told = events(rule.on_response(&request, &list));
         assert_eq!(told.len(), 1);
         assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
