@@ -85,11 +85,17 @@ class ImagePublishTests(unittest.TestCase):
         (self.files / f"{NAME}.sha256").write_text(f"{self.sha}  {NAME}\n")
         (self.files / "keeper-os-1.2.3.packages.txt").write_text("package 1\n")
         (self.files / "SOURCE-OFFER.txt").write_text("The written offer\n")
+        self.write_build_info()
         self.state = self.directory / "storage.json"
         self.state.write_text(json.dumps({"calls": [], "blobs": {}}))
         azure = self.directory / "az"
         azure.write_text(FAKE_AZ)
         azure.chmod(0o755)
+
+    def write_build_info(self, profile="ubuntu", debug_login="0", serial_console="0", config_public_keys="hub"):
+        (self.files / "keeper-os-1.2.3.build.txt").write_text(
+            f"profile={profile}\ndebug_login={debug_login}\nserial_console={serial_console}\n"
+            f"config_public_keys={config_public_keys}\n")
 
     def run_publish(self, *args, **env):
         return subprocess.run(
@@ -161,3 +167,20 @@ class ImagePublishTests(unittest.TestCase):
         state = self.storage()
         self.assertIn(INDEX, state["blobs"])
         self.assertEqual(sum(c[:2] == ["upload", f"images/{NAME}"] for c in state["calls"]), 1)
+
+    def test_the_family_comes_from_the_profile_the_image_was_built_with(self):
+        self.write_build_info(profile="debian")
+        run = self.run_publish()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["images"][0]["family"], "debian")
+
+    def test_a_test_build_is_staged_but_never_published(self):
+        for field in ({"debug_login": "1"}, {"serial_console": "1"}, {"config_public_keys": "test"},
+                      {"config_public_keys": "none"}):
+            with self.subTest(field):
+                self.write_build_info(**field)
+                self.assertEqual(self.run_publish().returncode, 0)
+                run = self.run_publish("--account", "cktest")
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn("test build", run.stderr)
+                self.assertEqual(self.storage()["calls"], [])

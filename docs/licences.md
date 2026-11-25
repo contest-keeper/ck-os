@@ -28,6 +28,7 @@ which most licences allow only on conditions. An admin building an image for the
 | **The Ubuntu name, logos and look** | Canonical trademark and IP policy | **Only unmodified Ubuntu may carry them** | Remove the trademarks from the modified image, or get Canonical's approval (see below) |
 | **Visual Studio Code (Microsoft binary)** | Microsoft product licence | **No.** It forbids sharing, publishing or offering the software to others | Do not put it in the published image (see below) |
 | VSCodium (VS Code built without Microsoft branding) | MIT | Yes | Keep the MIT notice. Extensions come from Open VSX, not the Microsoft marketplace |
+| Linux Mint repository (`--profile mint` only) | Packages mostly GPL and similar; the Mint name and logo are trademarks | Nothing is installed from it by default; no Mint name, logo or artwork in the image | **Mint's trademark policy has not been read.** Read and approve it before any Mint package or branding is added |
 | Code::Blocks | GPL v3 (SDK: LGPL v3) | Yes | Source offer, keep the notice and licence text |
 | Geany | GPL v2 or later | Yes | Source offer, keep the notice and licence text |
 | Firefox | Mozilla (MPL 2.0 for the code, separate trademark policy) | Not checked yet | Read the Mozilla trademark policy before shipping a branded Firefox with our policies and bookmarks |
