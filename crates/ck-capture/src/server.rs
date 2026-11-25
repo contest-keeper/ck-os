@@ -4,7 +4,7 @@
 use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::icap::{self, IcapRequest};
@@ -15,6 +15,22 @@ use crate::{
 const MAX_CONNECTIONS: usize = 64;
 /// Squid keeps connections open between messages, so this only ends a connection that went silent.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Wait after a failed `accept` (out of file descriptors, say) so the loop does not spin.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(200);
+
+/// Counts a connection while it lives, also when its thread panics.
+struct ConnectionSlot(Arc<Shared>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A rule or sink that panicked in another thread must not silence the others for good.
+fn locked<T: ?Sized>(mutex: &Mutex<Box<T>>) -> MutexGuard<'_, Box<T>> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 struct Shared {
     rule: Mutex<Box<dyn Rule>>,
@@ -44,6 +60,7 @@ pub fn serve(
             Ok(stream) => stream,
             Err(error) => {
                 tracing::warn!("a connection failed: {error}");
+                std::thread::sleep(ACCEPT_PAUSE);
                 continue;
             }
         };
@@ -52,15 +69,20 @@ pub fn serve(
             continue;
         }
         let shared = Arc::clone(&shared);
-        std::thread::spawn(move || {
+        let slot = ConnectionSlot(Arc::clone(&shared));
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let _slot = slot;
             if let Err(error) = handle(stream, &shared, prefix) {
                 tracing::debug!("connection ended: {error}");
                 // Only an observation machine has anywhere to write this.
                 let note = serde_json::json!({"event": "icap_error", "error": error.to_string()});
                 write_note(&shared, prefix, &note.to_string());
             }
-            shared.connections.fetch_sub(1, Ordering::SeqCst);
         });
+        // On failure the closure, and with it the slot, is dropped: the count is released.
+        if let Err(error) = spawned {
+            tracing::warn!("a connection thread cannot be started: {error}");
+        }
     }
     Ok(())
 }
@@ -84,8 +106,11 @@ fn handle(stream: TcpStream, shared: &Shared, prefix: &str) -> Result<(), Error>
             Ok(Some(request)) => request,
             Ok(None) => return Ok(()),
             Err(error) => {
-                // The proxy's own `bypass` setting lets the traffic go on without us.
-                let _ = icap::write_error(&mut writer);
+                // The proxy's own `bypass` setting lets the traffic go on without us. A silent
+                // connection that timed out is just closed, not answered with a 500.
+                if !is_timeout(&error) {
+                    let _ = icap::write_error(&mut writer);
+                }
                 return Err(error);
             }
         };
@@ -114,10 +139,13 @@ fn handle(stream: TcpStream, shared: &Shared, prefix: &str) -> Result<(), Error>
     }
 }
 
+fn is_timeout(error: &Error) -> bool {
+    matches!(error, Error::Io { source, .. }
+        if matches!(source.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut))
+}
+
 fn outputs_for(message: &IcapRequest, shared: &Shared) -> Vec<Output> {
-    let Ok(mut rule) = shared.rule.lock() else {
-        return Vec::new();
-    };
+    let mut rule = locked(&shared.rule);
     let Some(request_head) = parse_request_head(&message.req_head) else {
         return Vec::new();
     };
@@ -155,9 +183,7 @@ fn handle_outputs(shared: &Shared, prefix: &str, outputs: Vec<Output>) {
 }
 
 fn write_note(shared: &Shared, prefix: &str, line: &str) {
-    let Ok(mut sink) = shared.sink.lock() else {
-        return;
-    };
+    let mut sink = locked(&shared.sink);
     if let Err(error) = writeln!(sink, "{prefix}{line}").and_then(|()| sink.flush()) {
         tracing::warn!("cannot write what was observed: {error}");
     }
@@ -170,6 +196,17 @@ mod tests {
 
     use super::*;
     use crate::{EventKind, EventSink, NoEvents, Observer, Output, Request, Response, Rule};
+
+    #[test]
+    fn only_a_timeout_is_closed_without_an_answer() {
+        let io = |kind| Error::Io {
+            context: "test",
+            source: std::io::Error::from(kind),
+        };
+        assert!(is_timeout(&io(std::io::ErrorKind::WouldBlock)));
+        assert!(is_timeout(&io(std::io::ErrorKind::TimedOut)));
+        assert!(!is_timeout(&io(std::io::ErrorKind::InvalidData)));
+    }
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);

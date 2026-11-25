@@ -299,3 +299,16 @@ fn an_empty_or_unknown_answer_means_no_commands() {
         assert_eq!(reply.commands, [], "answer {body:?}");
     }
 }
+
+#[test]
+fn only_a_few_commands_of_one_reply_run() {
+    let stick = stick();
+    let executor = FakeExecutor::default();
+    let many: Vec<_> = (0..25)
+        .map(|n| signed(command(&format!("many-{n}"), Action::LockScreen)))
+        .collect();
+    let ran = stick
+        .uplink()
+        .process_commands(&stick.queue, &many, now(), &executor);
+    assert_eq!(ran, 10);
+}
