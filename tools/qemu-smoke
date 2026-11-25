@@ -159,7 +159,7 @@ run_checks() {
     'echo CK29_kiosk_$(grep -c CustomizePanel=NONE /etc/xdg/xfce4/kiosk/kioskrc)_vt_$(grep -c DontVTSwitch /etc/X11/xorg.conf.d/50-ck-novtswitch.conf)'
     'echo CK30_desktop_$(ls /home/contestant/Desktop | wc -l)_exec_$(find /home/contestant/Desktop -name "*.desktop" -perm -u+x | wc -l)_owner_$(stat -c %U /home/contestant/Desktop/firefox.desktop)'
     'echo CK31_menu_$(grep -c "<Filename>" /etc/xdg/xdg-xubuntu/menus/xfce-applications.menu)_panel_$(pgrep -u contestant -c xfce4-panel)'
-    'echo CK60_session_xdg_$(tr "\0" "\n" </proc/$(pgrep -u contestant -o -x xfce4-session)/environ | grep -c "^XDG_CONFIG_DIRS=.*xdg-xubuntu")'
+    'echo CK60_session_xdg_$(tr "\0" "\n" </proc/$(pgrep -u contestant -o -x xfce4-session)/environ | grep -cE "^XDG_CONFIG_DIRS=([^:]*:)*/etc/xdg/xdg-xubuntu(:|$)")'
     'runuser -u contestant -- systemctl start ck-refresh-connection.service >/dev/null 2>&1; echo CK32_refreshunit_$?'
     'runuser -u contestant -- systemctl --no-ask-password restart squid.service >/dev/null 2>&1; echo CK33_squidrestart_$?'
     'runuser -u contestant -- ck-refresh-connection --no-gui; echo CK34_refresh_$?'

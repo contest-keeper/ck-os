@@ -31,9 +31,11 @@ $script = @'
 set -euo pipefail
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-cp -r "$1" "$work/patch"
-find "$work/patch" -type f -exec sed -i 's/\r$//' {} +
-bash "$work/patch/apply-to-image.sh" --in-place "$2" --agent "$3"
+mkdir "$work/image"
+cp -r "$1" "$work/image/patch"
+cp -r "$4" "$work/image/keeper"
+find "$work/image" -type f -exec sed -i 's/\r$//' {} +
+bash "$work/image/patch/apply-to-image.sh" --in-place "$2" --agent "$3"
 '@
 # The script is passed on the command line with Unix line endings.
 $script = $script -replace "`r", ''
