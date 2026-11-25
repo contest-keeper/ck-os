@@ -5,6 +5,8 @@
 //! hash and a size of the source (the same code on two sticks shows without anyone's code being
 //! kept). No password, cookie, token, e-mail address or source code is ever put in an event.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ck_crypto::sha256_hex;
 use serde_json::json;
 
@@ -27,9 +29,12 @@ struct Pending {
     source_sha256_norm: Option<String>,
     source_bytes: usize,
     source_cut: bool,
+    /// Unix seconds when the submit was seen: the Hub compares this with the judge's time, not
+    /// the time the event was queued, which can be later.
+    submitted_at: u64,
 }
 
-/// An accepted submission that waits for the page of submissions, which tells its id.
+/// An accepted submission, already told, that waits for the page of submissions with its id.
 struct Awaiting {
     sent: Pending,
     user: Option<String>,
@@ -54,13 +59,19 @@ impl Codeforces {
         }
     }
 
-    /// Tells the submission that waited for its id, with the id when it is known.
+    /// Tells the id of the submission that waited for it, when the page names it. The submission
+    /// itself was told at the redirect, so a closed browser never loses it.
     fn finish_awaiting(&mut self, id: Option<u64>) -> Vec<Output> {
-        self.awaiting
-            .take()
-            .map(|waiting| submission_event(&waiting.sent, waiting.user.as_deref(), true, id))
-            .into_iter()
-            .collect()
+        let waiting = self.awaiting.take();
+        match (waiting, id) {
+            (Some(waiting), Some(id)) => vec![submission_event(
+                &waiting.sent,
+                waiting.user.as_deref(),
+                true,
+                Some(id),
+            )],
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -97,6 +108,7 @@ fn newest_submission_id(page: &str, sent: &Pending) -> Option<u64> {
     (same_problem && same_contest).then_some(id)
 }
 
+/// With an id this is the follow-up of an earlier event for the same submit (same `submitted_at`).
 fn submission_event(sent: &Pending, user: Option<&str>, accepted: bool, id: Option<u64>) -> Output {
     Output::Event {
         kind: EventKind::Submission,
@@ -112,6 +124,8 @@ fn submission_event(sent: &Pending, user: Option<&str>, accepted: bool, id: Opti
             "source_cut": sent.source_cut,
             "accepted": accepted,
             "submission_id": id,
+            "submitted_at": sent.submitted_at,
+            "follow_up": id.is_some(),
         }),
     }
 }
@@ -193,6 +207,9 @@ fn submission_from(request: &Request) -> Option<Pending> {
             .map(|code| sha256_hex(&normalize_source(code))),
         source_bytes: source.map_or(0, <[u8]>::len),
         source_cut: request.body_truncated,
+        submitted_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs()),
     })
 }
 
@@ -210,13 +227,13 @@ fn contest_of_path(path: &str) -> Option<String> {
 
 impl Rule for Codeforces {
     fn on_request(&mut self, request: &Request) -> Vec<Output> {
-        let mut outputs = match &mut self.observer {
+        let outputs = match &mut self.observer {
             Some(observer) => observer.on_request(request),
             None => Vec::new(),
         };
         if let Some(submission) = submission_from(request) {
-            // A new submit before the page of submissions: the earlier one is told without an id.
-            outputs.extend(self.finish_awaiting(None));
+            // A new submit comes first: the page of submissions would name this one, not the earlier.
+            self.awaiting = None;
             self.pending.retain(|old| old.path != submission.path);
             if self.pending.len() >= MAX_PENDING {
                 self.pending.remove(0);
@@ -239,15 +256,17 @@ impl Rule for Codeforces {
         {
             let sent = self.pending.remove(at);
             // The site answers a taken submission with a redirect to the list of submissions.
-            if response.status / 100 == 3 {
-                outputs.extend(self.finish_awaiting(None));
-                self.awaiting = Some(Awaiting {
-                    sent,
-                    user: self.user.clone(),
-                });
-            } else {
-                outputs.push(submission_event(&sent, self.user.as_deref(), false, None));
-            }
+            let accepted = response.status / 100 == 3;
+            outputs.push(submission_event(
+                &sent,
+                self.user.as_deref(),
+                accepted,
+                None,
+            ));
+            self.awaiting = accepted.then(|| Awaiting {
+                sent,
+                user: self.user.clone(),
+            });
             return outputs;
         }
         let content_type = response.head.header("content-type").unwrap_or("");
@@ -391,12 +410,19 @@ mod tests {
 
         let (post, head) = submit("/contest/2285/problem/B", "int main() { return 0; }");
         assert_eq!(rule.on_request(&post), Vec::<Output>::new());
-        // The redirect alone tells nothing yet: the page of submissions follows with the id.
-        assert_eq!(events(rule.on_response(&head, &answer(302))), NO_EVENTS);
+        // The redirect tells the submit at once, with no id: no later traffic is needed.
+        let first = events(rule.on_response(&head, &answer(302)));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["submission_id"], serde_json::Value::Null);
+        assert_eq!(first[0]["follow_up"], false);
+        assert!(first[0]["submitted_at"].as_u64().unwrap() > 1_700_000_000);
+        // The page of submissions follows with the id, for the same submit.
         let (request, list) = my_page(&my_row(245_000_123, "/contest/2285/problem/B"));
         let told = events(rule.on_response(&request, &list));
         assert_eq!(told.len(), 1);
         let event = &told[0];
+        assert_eq!(event["follow_up"], true);
+        assert_eq!(event["submitted_at"], first[0]["submitted_at"]);
         assert_eq!(event["username"], "ana_2");
         assert_eq!(event["contest_id"], "2285");
         assert_eq!(event["problem"], "B");
@@ -440,37 +466,33 @@ mod tests {
         let mut rule = Codeforces::new(false);
         let (post, head) = submit("/contest/2285/problem/B", "x");
         let _ = rule.on_request(&post);
-        let _ = rule.on_response(&head, &answer(302));
-        let (request, list) = my_page(&my_row(9, "/contest/2285/problem/C"));
-        let told = events(rule.on_response(&request, &list));
-        assert_eq!(told.len(), 1);
-        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+        let told = events(rule.on_response(&head, &answer(302)));
         assert_eq!(told[0]["accepted"], true);
+        let (request, list) = my_page(&my_row(9, "/contest/2285/problem/C"));
+        assert_eq!(events(rule.on_response(&request, &list)), NO_EVENTS);
     }
 
     #[test]
-    fn a_new_submit_tells_the_earlier_one_without_an_id() {
+    fn a_new_submit_before_the_list_gives_the_earlier_one_no_id() {
         let mut rule = Codeforces::new(false);
         let (post, head) = submit("/contest/2285/problem/B", "first");
         let _ = rule.on_request(&post);
-        let _ = rule.on_response(&head, &answer(302));
+        assert_eq!(events(rule.on_response(&head, &answer(302))).len(), 1);
         let (again, _) = submit("/contest/2285/problem/B", "second");
-        let told = events(rule.on_request(&again));
-        assert_eq!(told.len(), 1);
-        assert_eq!(told[0]["source_bytes"], 5);
-        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+        // Nothing more is told for the first: the newest row of the list is the second's.
+        assert_eq!(rule.on_request(&again), Vec::<Output>::new());
+        let (request, list) = my_page(&my_row(77, "/contest/2285/problem/B"));
+        assert_eq!(events(rule.on_response(&request, &list)), NO_EVENTS);
     }
 
     #[test]
-    fn a_page_without_submissions_tells_the_submission_without_an_id() {
+    fn a_page_without_submissions_tells_no_id_and_the_submit_stays_told() {
         let mut rule = Codeforces::new(false);
         let (post, head) = submit("/contest/2285/problem/B", "x");
         let _ = rule.on_request(&post);
-        let _ = rule.on_response(&head, &answer(302));
+        assert_eq!(events(rule.on_response(&head, &answer(302))).len(), 1);
         let (request, other) = page("<html>no table</html>");
-        let told = events(rule.on_response(&request, &other));
-        assert_eq!(told.len(), 1);
-        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+        assert_eq!(events(rule.on_response(&request, &other)), NO_EVENTS);
     }
 
     #[test]
@@ -483,9 +505,7 @@ mod tests {
         let mut rule = Codeforces::new(false);
         let (post, head) = submit("/contest/2285/problem/B", "a\r\nb\r\n");
         let _ = rule.on_request(&post);
-        let _ = rule.on_response(&head, &answer(302));
-        let (request, other) = page("<html></html>");
-        let told = events(rule.on_response(&request, &other));
+        let told = events(rule.on_response(&head, &answer(302)));
         assert_eq!(told[0]["source_sha256_norm"], sha256_hex(b"a\nb"));
     }
 
