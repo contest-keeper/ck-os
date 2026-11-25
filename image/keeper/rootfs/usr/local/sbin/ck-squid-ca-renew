@@ -1,14 +1,46 @@
 #!/bin/sh
 # Run by ck-squid-ca-renew.timer a minute after boot and every 15 minutes after that. A stick whose clock was
 # wrong at boot, for example with a flat clock battery, made its CA at the wrong time: once the real time is
-# known the CA may be expired or about to expire. Then it is replaced and Squid restarts to use it. Does nothing
-# when the CA is fine, or while the clock has not been set (timesyncd has not reached a server yet).
+# known the CA may be expired, about to expire, or not valid yet (made while the clock was ahead). Then it is
+# replaced and Squid restarts to use it. Does nothing when the CA is fine, or while the clock has not been set
+# (timesyncd has not reached a server yet).
+# CK_ROOT is a prefix for the tests; it is empty on the stick.
 set -eu
+root=${CK_ROOT:-}
+ca=$root/etc/ck/squid-ca/ca.crt
+
 if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" != yes ]; then
   exit 0
 fi
-if openssl x509 -checkend 604800 -noout -in /etc/ck/squid-ca/ca.crt >/dev/null 2>&1; then
+
+# True when the CA's start date is still ahead of the real time (a little slack for clock steps).
+not_valid_yet() {
+  started=$(openssl x509 -startdate -noout -in "$ca" 2>/dev/null | cut -d= -f2)
+  [ -n "$started" ] || return 1
+  started=$(date -u -d "$started" +%s 2>/dev/null) || return 1
+  [ "$started" -gt $(($(date +%s) + 300)) ]
+}
+
+# True when Squid's certificate database was not made for this CA (a renewal that failed half way); ck-squid-ca keeps
+# the fingerprint of the CA it made the database for.
+database_stale() {
+  [ "$(cat "$root/var/lib/squid/ssl_db.ca" 2>/dev/null || true)" != "$(openssl x509 -in "$ca" -noout -fingerprint -sha256 2>/dev/null)" ]
+}
+
+ca_fine=
+if openssl x509 -checkend 604800 -noout -in "$ca" >/dev/null 2>&1 && ! not_valid_yet; then
+  ca_fine=1
+fi
+if [ -n "$ca_fine" ] && ! database_stale; then
   exit 0
 fi
-/usr/local/sbin/ck-squid-ca
-systemctl restart squid.service
+# Squid is stopped while its certificate database is thrown away and made again for the new CA. If the new CA
+# cannot be made, Squid still gets started, so the stick keeps its proxy (and the unit shows as failed).
+systemctl stop squid.service
+trap 'systemctl start squid.service' EXIT
+if [ -n "$ca_fine" ]; then
+  # Only the database is wrong: ck-squid-ca makes it again for the CA that is there.
+  "$root/usr/local/sbin/ck-squid-ca"
+else
+  "$root/usr/local/sbin/ck-squid-ca" --force
+fi
