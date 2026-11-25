@@ -119,7 +119,8 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
     // The temporary folder goes away with this function: keep what QEMU said.
     let errors = machine.error_text();
     if !errors.is_empty() {
-        let _ = fs::write(cli.out.join("qemu.err"), &errors);
+        fs::write(cli.out.join("qemu.err"), &errors)
+            .map_err(|e| format!("writing qemu.err to {}: {e}", cli.out.display()))?;
     }
 
     let problems = match outcome {
@@ -174,7 +175,12 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
             None => {}
         }
         if let Some(status) = machine.exited() {
-            return Outcome::MachineStopped(status);
+            // The report may have been written between the read above and the exit.
+            return match ck_selftest::find_report(&machine.serial_text()) {
+                Some(Ok(report)) => Outcome::Report(Box::new(report)),
+                Some(Err(error)) => Outcome::Unreadable(error.to_string()),
+                None => Outcome::MachineStopped(status),
+            };
         }
         if Instant::now() >= deadline {
             return Outcome::TimedOut;
