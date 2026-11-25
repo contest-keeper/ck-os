@@ -48,6 +48,8 @@ pub enum Error {
     Io(#[source] std::io::Error),
     #[error("the Hub did not accept the heartbeat: HTTP {0}")]
     Rejected(u16),
+    #[error("the Hub address must be https (or http to this machine); nothing was sent")]
+    InsecureAddress,
     #[error("cannot reach the Hub: {0}")]
     Unreachable(String),
     #[error("the event queue: {0}")]
@@ -245,6 +247,10 @@ impl Uplink {
     /// Posts `body` signed with the stick's secret and returns the answer's body, at most
     /// `MAX_ANSWER_BYTES` of it.
     fn post(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
+        // Every send passes here, so a caller that skipped `address` still cannot use plain http.
+        if !enrolment::permits_secret(url) {
+            return Err(Error::InsecureAddress);
+        }
         if self.enrolment_pending()? {
             return Err(Error::EnrolmentPending);
         }
