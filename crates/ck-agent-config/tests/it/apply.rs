@@ -429,3 +429,19 @@ fn bluetooth_is_still_switched_on_when_the_file_writes_stopped_before_the_marker
     assert!(apply_basics(&root, &load(&root).expect("valid settings")).is_err());
     assert!(bluetooth_unblock_needed(&root));
 }
+
+#[test]
+fn a_site_list_the_image_never_had_is_removed_again_with_the_setting() {
+    let (dir, root) = stick(SETTINGS);
+    let list = dir.path().join("etc/squid/acl_allowed_domains.txt");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(list.exists());
+
+    let without = SETTINGS.replace(
+        r#""allowed_domains": ["example.org", ".docs.example.org"],"#,
+        "",
+    );
+    fs::write(dir.path().join("ck-config/config.json"), without).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply again");
+    assert!(!list.exists());
+}

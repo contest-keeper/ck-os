@@ -191,16 +191,25 @@ fn image_copy_path(absolute: &str) -> String {
     format!("{absolute}.ck-image")
 }
 
+fn image_absent_path(absolute: &str) -> String {
+    format!("{absolute}.ck-image-absent")
+}
+
 /// Keeps the image's own version of `absolute` before the settings first replace it, so a setting that
 /// is later taken away can bring it back. Only the first copy is kept: it is the image's, never ours.
 pub(crate) fn keep_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
     let copy = image_copy_path(absolute);
-    if root.path(&copy).exists() {
+    let absent = image_absent_path(absolute);
+    if root.path(&copy).exists() || root.path(&absent).exists() {
         return Ok(());
     }
     match fs::read(root.path(absolute)) {
         Ok(original) => write(root, &copy, &original, 0o644),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        // The image has no such file: say so, so that taking the setting away removes ours again.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(
+            root, &absent, b"absent
+", 0o644,
+        ),
         Err(e) => Err(Error::io(format!("reading {absolute}"), e)),
     }
 }
@@ -210,7 +219,12 @@ pub(crate) fn keep_image_copy(root: &Root, absolute: &str) -> Result<(), Error> 
 pub(crate) fn restore_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
     match fs::read(root.path(&image_copy_path(absolute))) {
         Ok(original) => write(root, absolute, &original, 0o644),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if root.path(&image_absent_path(absolute)).exists() {
+                remove(root, absolute)?;
+            }
+            Ok(())
+        }
         Err(e) => Err(Error::io(format!("reading the image's {absolute}"), e)),
     }
 }
