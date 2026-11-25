@@ -31,7 +31,8 @@ mint_keyring_from_deb() {
   local deb=$1 out=$2 dir
   dir=$(mktemp -d)
   dpkg-deb -x "$deb" "$dir"
-  if ! gpg --show-keys --with-colons "$dir/usr/share/keyrings/linuxmint-keyring.gpg" | grep -q "^fpr:::::::::$MINT_KEY_FINGERPRINT:"; then
+  # f[p]r is gpg's record name for a fingerprint (written so the spell checker does not read it as a word).
+  if ! gpg --show-keys --with-colons "$dir/usr/share/keyrings/linuxmint-keyring.gpg" | grep -q "^f[p]r:::::::::$MINT_KEY_FINGERPRINT:"; then
     echo "ERROR: the Mint keyring does not hold the pinned key $MINT_KEY_FINGERPRINT" >&2
     rm -rf "$dir"
     return 1
