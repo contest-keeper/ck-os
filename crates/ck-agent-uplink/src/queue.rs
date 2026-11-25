@@ -138,6 +138,7 @@ impl Queue {
     /// read is set aside as `.bad` so it does not block the ones after it.
     pub fn pending(&self) -> Result<Vec<(u64, Event)>, Error> {
         let mut found = Vec::new();
+        let mut quarantined = false;
         let entries = fs::read_dir(&self.dir).map_err(|e| queue_error("reading the queue", &e))?;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -156,7 +157,11 @@ impl Queue {
             } else {
                 tracing::warn!("the queued file {name} is not an event; setting it aside");
                 let _ = fs::rename(entry.path(), entry.path().with_extension("bad"));
+                quarantined = true;
             }
+        }
+        if quarantined {
+            self.prune_aside();
         }
         found.sort_by_key(|(counter, _)| *counter);
         Ok(found)
