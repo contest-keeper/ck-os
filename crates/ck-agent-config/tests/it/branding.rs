@@ -226,3 +226,64 @@ fn the_title_is_welcome_without_a_display_name_and_a_huge_text_is_not_used() {
         "the rest is still applied"
     );
 }
+
+#[test]
+fn bookmarks_and_home_page_taken_out_of_the_settings_go_back_to_the_images() {
+    let chosen = r#"{
+        "bookmarks": [{"title": "Docs", "url": "https://docs.example/"}],
+        "home_page": "https://judge.example/"
+    }"#;
+    let (dir, root) = stick(&settings(chosen));
+    apply(&root).expect("apply with bookmarks");
+    assert_eq!(
+        policies(&dir)["policies"]["Homepage"]["URL"],
+        "https://judge.example/"
+    );
+
+    // Only the home page is taken away: the image's bookmarks come back, the new home page stays.
+    let only_home = r#"{"home_page": "https://other.example/"}"#;
+    fs::write(
+        dir.path().join("ck-config/config.json"),
+        settings(only_home),
+    )
+    .expect("settings");
+    apply(&root).expect("apply with a home page only");
+    let json = policies(&dir);
+    assert_eq!(json["policies"]["Bookmarks"][0]["Title"], "Judge");
+    assert_eq!(
+        json["policies"]["Homepage"]["URL"],
+        "https://other.example/"
+    );
+
+    // Nothing chosen any more: the image's own policies are back.
+    fs::write(dir.path().join("ck-config/config.json"), settings("{}")).expect("settings");
+    apply(&root).expect("apply with nothing");
+    assert_eq!(
+        policies(&dir),
+        serde_json::from_str::<Value>(IMAGE_POLICIES).expect("image")
+    );
+}
+
+#[test]
+fn damaged_firefox_policies_are_not_kept_as_the_images_baseline() {
+    let chosen = r#"{"home_page": "https://judge.example/"}"#;
+    let (dir, root) = stick(&settings(chosen));
+    let live = dir
+        .path()
+        .join("usr/lib/firefox/distribution/policies.json");
+    fs::write(&live, "{ not json").expect("damage");
+    assert!(apply(&root).is_err());
+    assert!(
+        !dir.path()
+            .join("usr/lib/firefox/distribution/policies.json.ck-image")
+            .exists()
+    );
+
+    // Once the file is repaired the next boot works from it.
+    fs::write(&live, IMAGE_POLICIES).expect("repair");
+    apply(&root).expect("apply after the repair");
+    assert_eq!(
+        policies(&dir)["policies"]["Homepage"]["URL"],
+        "https://judge.example/"
+    );
+}
