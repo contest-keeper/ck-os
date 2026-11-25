@@ -7,12 +7,15 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 
 INDEX = "images/images.json"
 MAX_IMAGES = 200
 MAX_INDEX_BYTES = 1024 * 1024
+# The newest image of a family and the one before it (for a rollback); older ones are deleted after a publish.
+KEEP_PER_FAMILY = 2
 
 
 def sha256(path):
@@ -78,6 +81,22 @@ def prepare(directory, version, publishing=False):
     return entry, files
 
 
+def prune(images):
+    """Splits the index (in publish order) into the newest KEEP_PER_FAMILY images of each family and the rest."""
+    kept, removed, count = [], [], {}
+    for image in reversed(images):
+        family = image.get("family")
+        count[family] = count.get(family, 0) + 1
+        (kept if count[family] <= KEEP_PER_FAMILY else removed).append(image)
+    kept.reverse()
+    return kept, removed
+
+
+def release_blobs(image):
+    return [image["blob"], f"images/{image['filename']}.sha256", f"images/{image['id']}.packages.txt",
+            image["source_offer"]]
+
+
 def publish(account, entry, files):
     def blob(action, name, *options):
         return subprocess.check_output(
@@ -114,8 +133,10 @@ def publish(account, entry, files):
         matches = [image for image in images if image["id"] == entry["id"]]
         if matches and matches != [entry]:
             raise ValueError(f"image ID {entry['id']} is already listed with different details")
+        removed = []
         if not matches:
             images.append(entry)
+            images[:], removed = prune(images)
         if len(images) > MAX_IMAGES:
             raise ValueError("the image index exceeds the Hub's image count limit")
         data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode()
@@ -139,6 +160,15 @@ def publish(account, entry, files):
             # A concurrent writer must never overwrite a newer image index.
             blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
                  "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+        # The Hub no longer lists these, so deleting their files cannot break a download. A failed delete only
+        # leaves files behind, so it must not fail a publish that already went through.
+        for image in removed:
+            for name in release_blobs(image):
+                try:
+                    if exists(name):
+                        blob("delete", name, "--delete-snapshots", "include", "-o", "none")
+                except subprocess.CalledProcessError as error:
+                    print(f"warning: could not delete {name}: {error}", file=sys.stderr)
 
 
 def main():
