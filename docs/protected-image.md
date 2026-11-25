@@ -23,6 +23,9 @@ What is protected, and what is not:
 - With the signed boot image the command line is inside the signature. Shim only starts it if the firmware's db or the
   laptop's MOK list holds the certificate, so a changed root, initramfs or command line does not boot. This needs the
   enrolment below on every laptop.
+- Every command line that turns verity on carries `panic=0`. When the root fails its check, initramfs-tools then halts the
+  machine instead of opening its console shell, which needs no password and would allow rewriting the raw partitions.
+  `tools/qemu-smoke` fails a boot that shows the `(initramfs)` prompt.
 - `CKSTATE` and the CKCONFIG partition are not protected. Nothing that runs the system is read from `/var` or `/home`;
   settings are checked by the agent (signed by the Hub).
 - Legacy BIOS boots have no signature checking at all.

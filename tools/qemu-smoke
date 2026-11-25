@@ -11,8 +11,7 @@
 #              verity checks of the verity mode.
 #     refused: Secure Boot without the certificate; must NOT reach the login prompt, because shim refuses the UKI.
 #     tamper:  a copy of the image with the first block of the root partition overwritten, booted like verity mode; must
-#              NOT reach the login prompt, and the log must show the verity or mount failure. Takes CK_TAMPER_MODE=refused
-#              to run the tamper step on a refused boot instead. Needs sfdisk. Not run: shim with the MOK list (see
+#              NOT reach the login prompt, and the log must show the verity or mount failure. Needs sfdisk. Not run: shim with the MOK list (see
 #              docs/protected-image.md); the test enrols the certificate in the firmware's db instead.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
@@ -386,6 +385,12 @@ started=$SECONDS
 died=0
 for _ in $(seq 1 "$timeout_s"); do
   # These two must never reach a login prompt; the loop below waits the whole time to be sure.
+  # The initramfs shell (panic() without panic=) would be a root shell on a failed check: never acceptable.
+  if [[ $mode == refused || $mode == tamper || $mode == verity || $mode == signed ]] && grep -qF '(initramfs)' "$log"; then
+    echo "FAIL [$mode]: the initramfs opened a shell (the kernel command line has no panic= policy); last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
   if [[ $mode == refused || $mode == tamper ]] && grep -q 'login:' "$log"; then
     echo "FAIL [$mode]: the login prompt was reached, but this boot must be refused" >&2
     exit 1

@@ -220,6 +220,7 @@ cleanup() {
   rm -rf "$WORK"
   for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m" 2>/dev/null; done
   [[ -n ${STATE_MNT:-} ]] && umount "$STATE_MNT" 2>/dev/null
+  [[ -n ${ESP_MNT:-} ]] && umount "$ESP_MNT" 2>/dev/null && rmdir "$ESP_MNT" 2>/dev/null
   umount "$MNT" 2>/dev/null
   [[ -n $LOOP ]] && losetup -d "$LOOP"
   rmdir "$MNT" 2>/dev/null
@@ -426,7 +427,9 @@ ck_cmdline_extra=
 [[ $READ_ONLY_ROOT -eq 1 ]] && ck_cmdline_extra=" ck.overlay=1"
 # The root hash is not known yet and cannot be in the root it protects: grub.cfg gets a variable that the EFI
 # partition's stub sets (see the verity step below). root= comes last on the line, so it wins over GRUB's own.
-[[ $VERITY -eq 1 ]] && ck_cmdline_extra="$ck_cmdline_extra ck.verity=1 ck.roothash=@ROOTHASH@ root=/dev/mapper/ckroot"
+# panic=0 on every verity command line: when the root fails its check, initramfs-tools' panic() halts the machine. Without
+# panic= it opens a root shell on the console that needs no password, from which the raw partitions can be rewritten.
+[[ $VERITY -eq 1 ]] && ck_cmdline_extra="$ck_cmdline_extra ck.verity=1 ck.roothash=@ROOTHASH@ root=/dev/mapper/ckroot panic=0"
 if [[ $SERIAL_CONSOLE -eq 1 ]]; then
   cat >"$MNT/etc/default/grub.d/ck.cfg" <<EOF
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 lockdown=integrity$ck_cmdline_extra"
@@ -734,7 +737,7 @@ if [[ $VERITY -eq 1 ]]; then
     # Kernel, initramfs and the whole command line (with the root hash) in one file signed with our key. Shim starts
     # grubx64.efi after BOOTX64.EFI, so the signed image takes the place of GRUB and the firmware's db or the
     # laptop's MOK list (the organizer enrols the certificate once) decides whether it may run.
-    uki_cmdline="root=/dev/mapper/ckroot ro ck.overlay=1 ck.verity=1 ck.roothash=$root_hash lockdown=integrity"
+    uki_cmdline="root=/dev/mapper/ckroot ro ck.overlay=1 ck.verity=1 ck.roothash=$root_hash lockdown=integrity panic=0"
     [[ $SERIAL_CONSOLE -eq 1 ]] && uki_cmdline="$uki_cmdline console=tty0 console=ttyS0,115200"
     ukify build --linux="$WORK/uki/vmlinuz" --initrd="$WORK/uki/initrd.img" --cmdline="$uki_cmdline" \
       --os-release="@$WORK/uki/os-release" --uname="$uki_uname" \
