@@ -801,6 +801,21 @@ fn an_answer_that_redirects_is_not_the_hubs_and_the_event_stays_queued() {
 }
 
 #[test]
+fn one_flush_sends_a_bounded_number_of_events() {
+    let hub = fake_hub(vec![200; 100]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    for n in 0..101 {
+        push(&queue, &uplink, &format!("user{n}"));
+    }
+    let url = uplink.events_url().expect("url");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 100);
+    assert_eq!(queue.pending().expect("pending").len(), 1, "the rest waits");
+}
+
+#[test]
 fn an_event_the_hub_already_has_counts_as_sent_and_an_unreachable_hub_loses_nothing() {
     let hub = fake_hub(vec![409]);
     let dir = TempDir::new().expect("temp dir");

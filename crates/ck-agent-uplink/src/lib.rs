@@ -28,6 +28,8 @@ const CONFIG_COPY: &str = "etc/ck/config.json";
 /// Where events go. The Hub answers 409 for one it already has, which counts as sent.
 pub const EVENTS_PATH: &str = "/api/v1/events";
 /// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
+/// Events sent in one `flush`: each one is a request with its own connection.
+const MAX_PER_FLUSH: usize = 100;
 const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
 /// The most the Hub may answer with. A few commands are a few kilobytes.
 const MAX_ANSWER_BYTES: u64 = 64 * 1024;
@@ -199,9 +201,12 @@ impl Uplink {
     ///
     /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
     /// sent. A 400, 413 or 422 means it never will: the event is set aside as `.refused`. An error is returned only when nothing was sent; events not sent stay in the queue.
+    ///
+    /// At most `MAX_PER_FLUSH` events go in one call, so a long backlog does not hold up the
+    /// heartbeats and commands that share the loop; the next round sends the rest.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
-        for (counter, event) in queue.pending()? {
+        for (counter, event) in queue.pending()?.into_iter().take(MAX_PER_FLUSH) {
             match self.post(url, &event.canonical_bytes()) {
                 Ok(_) | Err(Error::Rejected(409)) => {
                     queue.remove(counter)?;
