@@ -191,6 +191,13 @@ fn image_copy_path(absolute: &str) -> String {
     format!("{absolute}.ck-image")
 }
 
+/// Like `Path::exists`, but an error other than "not there" is reported instead of read as "not there".
+fn exists(root: &Root, absolute: &str) -> Result<bool, Error> {
+    root.path(absolute)
+        .try_exists()
+        .map_err(|e| Error::io(format!("checking {absolute}"), e))
+}
+
 fn image_absent_path(absolute: &str) -> String {
     format!("{absolute}.ck-image-absent")
 }
@@ -200,7 +207,7 @@ fn image_absent_path(absolute: &str) -> String {
 pub(crate) fn keep_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
     let copy = image_copy_path(absolute);
     let absent = image_absent_path(absolute);
-    if root.path(&copy).exists() || root.path(&absent).exists() {
+    if exists(root, &copy)? || exists(root, &absent)? {
         return Ok(());
     }
     match fs::read(root.path(absolute)) {
@@ -220,7 +227,7 @@ pub(crate) fn restore_image_copy(root: &Root, absolute: &str) -> Result<(), Erro
     match fs::read(root.path(&image_copy_path(absolute))) {
         Ok(original) => write(root, absolute, &original, 0o644),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if root.path(&image_absent_path(absolute)).exists() {
+            if exists(root, &image_absent_path(absolute))? {
                 remove(root, absolute)?;
             }
             Ok(())

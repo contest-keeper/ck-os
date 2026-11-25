@@ -129,7 +129,11 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
     // Always built from the image's own policies, so a bookmark list or home page that was taken out of
     // the settings does not stay from an earlier boot.
     let image_copy = format!("{FIREFOX_POLICIES}.ck-image");
-    let source = if root.path(&image_copy).exists() {
+    let source = if root
+        .path(&image_copy)
+        .try_exists()
+        .map_err(|e| Error::io(format!("checking {image_copy}"), e))?
+    {
         image_copy.as_str()
     } else {
         FIREFOX_POLICIES
