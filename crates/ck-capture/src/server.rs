@@ -17,6 +17,8 @@ const MAX_CONNECTIONS: usize = 64;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Wait after a failed `accept` (out of file descriptors, say) so the loop does not spin.
 const ACCEPT_PAUSE: Duration = Duration::from_millis(200);
+/// How often the rule is asked what it holds when no traffic comes.
+const IDLE_TICK: Duration = Duration::from_secs(2);
 
 /// Counts a connection while it lives, also when its thread panics.
 struct ConnectionSlot(Arc<Shared>);
@@ -55,6 +57,17 @@ pub fn serve(
         events,
         connections: AtomicUsize::new(0),
     });
+    let ticker = Arc::clone(&shared);
+    let started = std::thread::Builder::new().spawn(move || {
+        loop {
+            std::thread::sleep(IDLE_TICK);
+            let outputs = locked(&ticker.rule).on_idle();
+            handle_outputs(&ticker, prefix, outputs);
+        }
+    });
+    if let Err(error) = started {
+        tracing::warn!("the idle timer cannot be started: {error}");
+    }
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(stream) => stream,
