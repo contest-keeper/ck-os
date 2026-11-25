@@ -349,3 +349,35 @@ fn a_failure_part_way_never_leaves_a_hash_for_settings_that_were_not_all_applied
     assert!(!dir.path().join("etc/ck/config.sha256").exists());
     assert!(!dir.path().join("etc/ck/config.json").exists());
 }
+
+#[test]
+fn a_site_list_taken_out_of_the_settings_goes_back_to_the_images_list() {
+    let (dir, root) = stick(SETTINGS);
+    let list = dir.path().join("etc/squid/acl_allowed_domains.txt");
+    fs::create_dir_all(list.parent().expect("parent")).expect("squid folder");
+    fs::write(
+        &list,
+        ".image.example
+",
+    )
+    .expect("the image's list");
+
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(
+        fs::read_to_string(&list)
+            .expect("list")
+            .contains(".example.org")
+    );
+
+    let without = SETTINGS.replace(
+        r#""allowed_domains": ["example.org", ".docs.example.org"],"#,
+        "",
+    );
+    fs::write(dir.path().join("ck-config/config.json"), without).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply again");
+    assert_eq!(
+        fs::read_to_string(&list).expect("list"),
+        ".image.example
+"
+    );
+}

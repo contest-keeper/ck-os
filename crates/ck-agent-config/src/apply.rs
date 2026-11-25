@@ -19,6 +19,11 @@ const SITE: &str = "/etc/ck/site";
 pub const WIFI_CONNECTION: &str = "/etc/NetworkManager/system-connections/ck-wifi.nmconnection";
 /// Exists while the settings ask for Bluetooth to be blocked. The self-test reads it back.
 pub const BLOCK_BLUETOOTH: &str = "/etc/ck/block-bluetooth";
+/// Whether an earlier boot asked for Bluetooth to be blocked (the marker the self-test reads back).
+#[must_use]
+pub fn bluetooth_marked_blocked(root: &Root) -> bool {
+    root.path(BLOCK_BLUETOOTH).exists()
+}
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
 
 const GENERATED: &str = "# Written at boot by ck-agent from the admin tool settings\n";
@@ -84,9 +89,12 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
 
     // No sites chosen: keep the image's own list rather than block everything.
     if let Some(list) = allowlist(settings) {
+        keep_image_copy(root, SQUID_ALLOWLIST)?;
         write(root, SQUID_ALLOWLIST, list.as_bytes(), 0o644)?;
     } else {
-        tracing::warn!("no allowed sites in the settings; keeping the image's list");
+        // A list written for an earlier boot is replaced by the image's own, not kept.
+        tracing::warn!("no allowed sites in the settings; using the image's list");
+        restore_image_copy(root, SQUID_ALLOWLIST)?;
     }
 
     // Last: the copy and its hash say "these settings are applied" (the self-test compares the hash, and a
@@ -147,6 +155,35 @@ fn keyfile_value(value: &str) -> String {
     out.push_str(core);
     out.push_str(&space.repeat(trailing));
     out
+}
+
+/// Where the image's own version of a file the settings can change is kept, the first time it is changed.
+fn image_copy_path(absolute: &str) -> String {
+    format!("{absolute}.ck-image")
+}
+
+/// Keeps the image's own version of `absolute` before the settings first replace it, so a setting that
+/// is later taken away can bring it back. Only the first copy is kept: it is the image's, never ours.
+pub(crate) fn keep_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
+    let copy = image_copy_path(absolute);
+    if root.path(&copy).exists() {
+        return Ok(());
+    }
+    match fs::read(root.path(absolute)) {
+        Ok(original) => write(root, &copy, &original, 0o644),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(format!("reading {absolute}"), e)),
+    }
+}
+
+/// Puts the image's own version of `absolute` back, when the settings changed it before. Nothing to do
+/// when they never did.
+pub(crate) fn restore_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
+    match fs::read(root.path(&image_copy_path(absolute))) {
+        Ok(original) => write(root, absolute, &original, 0o644),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(format!("reading the image's {absolute}"), e)),
+    }
 }
 
 /// Removes a file written by an earlier boot. A file that is not there is fine.

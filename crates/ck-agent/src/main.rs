@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{
-    Error, Root, Trust, apply_basics, apply_branding, load_for_boot, write_trust,
+    Error, Root, Trust, apply_basics, apply_branding, bluetooth_marked_blocked, load_for_boot,
+    write_trust,
 };
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
@@ -165,6 +166,7 @@ fn apply_config(root: &Root) -> ExitCode {
     // A failing step must not skip the ones after it: the admin password, the hostname and the radio
     // blocks do not depend on the files written before them. The exit code still says it failed.
     let mut failed = false;
+    let bluetooth_was_blocked = bluetooth_marked_blocked(root);
     if let Err(error) = apply_basics(root, &loaded) {
         tracing::error!("applying the settings failed: {error}");
         failed = true;
@@ -177,6 +179,8 @@ fn apply_config(root: &Root) -> ExitCode {
         set_running_hostname(&loaded.config.computer_name());
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
+        } else if bluetooth_was_blocked {
+            unblock_bluetooth();
         }
         if loaded.config.settings.block_usb_storage {
             apply_usb_storage_rules();
@@ -200,13 +204,18 @@ fn record_trust(root: &Root, trust: &Trust) {
     }
 }
 
-/// Gives `ckadmin` the password the admin chose. Without a hash the account stays locked. A
-/// failure leaves it locked too (nobody can use sudo), so the rest of the settings still apply.
+/// Gives `ckadmin` the password the admin chose. Without a hash the account is locked, also when an
+/// earlier boot had set a password. A failed `chpasswd`
+/// leaves it locked (nobody can use sudo); a failed lock is logged, and the rest of the settings still apply.
 fn set_admin_password(hash: Option<&str>) {
-    match admin_account::set_password(std::path::Path::new("chpasswd"), hash) {
+    match admin_account::set_password(
+        std::path::Path::new("chpasswd"),
+        std::path::Path::new("passwd"),
+        hash,
+    ) {
         Ok(admin_account::Outcome::Set) => tracing::info!("admin password set"),
         Ok(admin_account::Outcome::Locked) => {
-            tracing::info!("no admin password in the settings; the admin account stays locked");
+            tracing::info!("no admin password in the settings; the admin account is locked");
         }
         Err(error) => {
             tracing::error!("cannot set the admin password, the account stays locked: {error}");
@@ -260,6 +269,18 @@ fn block_bluetooth() {
         Ok(status) if status.success() => tracing::info!("Bluetooth blocked"),
         Ok(status) => tracing::warn!("rfkill could not block Bluetooth ({status})"),
         Err(error) => tracing::warn!("cannot run rfkill, Bluetooth is not blocked: {error}"),
+    }
+}
+
+/// Switches Bluetooth on again when an earlier boot blocked it and the settings no longer ask for it.
+fn unblock_bluetooth() {
+    match std::process::Command::new("rfkill")
+        .args(["unblock", "bluetooth"])
+        .status()
+    {
+        Ok(status) if status.success() => tracing::info!("Bluetooth unblocked"),
+        Ok(status) => tracing::warn!("rfkill could not unblock Bluetooth ({status})"),
+        Err(error) => tracing::warn!("cannot run rfkill, Bluetooth stays as it is: {error}"),
     }
 }
 
