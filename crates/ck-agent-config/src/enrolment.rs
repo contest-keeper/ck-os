@@ -105,7 +105,18 @@ pub(crate) fn resolve(
 }
 
 fn parse<T: DeserializeOwned>(raw: &[u8]) -> Result<T, Error> {
-    serde_json::from_slice(raw).map_err(|error| Error::SettingsUnreadable(error.to_string()))
+    serde_json::from_slice(raw).map_err(|error| Error::SettingsUnreadable(describe(&error)))
+}
+
+/// Where and what kind of mistake, never the text of the error: serde repeats the offending value
+/// (`invalid type: string "..."`), and the file holds the stick's token.
+fn describe(error: &serde_json::Error) -> String {
+    format!(
+        "{:?} at line {} column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
 }
 
 fn save_first_key(path: &std::path::Path, token: &Token) -> std::io::Result<()> {
@@ -122,4 +133,18 @@ fn save_first_key(path: &std::path::Path, token: &Token) -> std::io::Result<()> 
     #[cfg(unix)]
     fs::File::open(folder)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_parse_error_never_repeats_a_value_of_the_file() {
+        let raw = br#"{"schema": "very-secret-token-value"}"#;
+        let error = parse::<Schema>(raw).err().expect("an error");
+        let text = error.to_string();
+        assert!(!text.contains("very-secret"), "{text}");
+        assert!(text.contains("line 1"), "{text}");
+    }
 }
