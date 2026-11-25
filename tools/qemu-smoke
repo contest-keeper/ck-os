@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Boot a built image in QEMU and wait for the login prompt on the serial console.
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
-#   MODE: uefi | secureboot | bios | all (default all). "all" runs the three boot modes one after another
+#   MODE: uefi | secureboot | bios | all (default all) | checks. "all" runs the three boot modes one after another
 #   and exits non-zero if any of them fails.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
@@ -12,7 +12,7 @@
 # skipped Secure Boot cannot pass.
 set -euo pipefail
 
-image=${1:?usage: qemu-smoke IMAGE [uefi|secureboot|bios|all] [timeout]}
+image=${1:?usage: qemu-smoke IMAGE [uefi|secureboot|bios|all|checks] [timeout]}
 mode=${2:-all}
 timeout_s=${3:-240}
 
