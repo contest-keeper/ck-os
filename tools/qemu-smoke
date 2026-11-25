@@ -340,6 +340,8 @@ run_layout() {
     'echo L3_var_$(findmnt -no LABEL,FSROOT /var | tr " " :)_home_$(findmnt -no LABEL,FSROOT /home | tr " " :)'
     'touch /usr/ck-layout-probe && echo L4_write_ok_$(test -e /media/ck-ro/usr/ck-layout-probe && echo ON_DISK || echo not_on_disk)'
     'echo L5_state_$(df --output=size -B1M /state | tail -1 | tr -d " ")_mb_fstab_root_$(grep -c " / " /etc/fstab)'
+    # What a failed run needs to be understood: the kernel command line, what the initramfs holds, what the kernel said.
+    'cat /proc/cmdline; lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "ck-|overlay|verity"; dmesg | grep -iE "overlay|verity|ck-" | tail -8; findmnt -rno TARGET,FSTYPE,SOURCE / /media/ck-ro'
     'echo L_$((1+1))_DONE'
   )
   if [[ $mode == verity || $mode == signed ]]; then

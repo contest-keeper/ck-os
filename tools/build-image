@@ -499,6 +499,21 @@ if [[ $READ_ONLY_ROOT -eq 1 ]]; then
     install -D -m 0755 "$REPO/image/protected/initramfs/scripts/local-top/ck-verity" "$MNT/etc/initramfs-tools/scripts/local-top/ck-verity"
   fi
   chroot "$MNT" update-initramfs -u -k all
+  # A guard: an initramfs without the memory layer script would boot with a read-only system and no error.
+  # shellcheck disable=SC2016 # the loop runs in the chroot
+  initrd_list=$(chroot "$MNT" sh -c 'for initrd in /boot/initrd.img-*; do lsinitramfs "$initrd"; done')
+  grep -q 'scripts/init-bottom/ck-overlay' <<<"$initrd_list" || {
+    echo "ERROR: the initramfs does not contain the ck-overlay script" >&2
+    exit 1
+  }
+  if [[ $VERITY -eq 1 ]]; then
+    for needed in scripts/local-top/ck-verity sbin/veritysetup; do
+      grep -q "$needed" <<<"$initrd_list" || {
+        echo "ERROR: the initramfs does not contain $needed" >&2
+        exit 1
+      }
+    done
+  fi
 fi
 
 echo "== remove Ubuntu branding, add the source offer"

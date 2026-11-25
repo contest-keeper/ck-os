@@ -15,10 +15,13 @@ esac
 # shellcheck disable=SC1091
 . /scripts/functions
 
-grep -qw 'ck.verity=1' /proc/cmdline || exit 0
+read -r cmdline </proc/cmdline
+case " $cmdline " in
+  *" ck.verity=1 "*) ;;
+  *) exit 0 ;;
+esac
 
 roothash=
-read -r cmdline </proc/cmdline
 for word in $cmdline; do
   case $word in
     ck.roothash=*) roothash=${word#ck.roothash=} ;;
