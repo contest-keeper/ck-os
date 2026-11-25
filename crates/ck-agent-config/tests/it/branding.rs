@@ -87,11 +87,15 @@ fn a_stick_without_a_number_counts_as_machine_1() {
 #[test]
 fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "wall.png"}"#));
-    fs::write(dir.path().join("ck-config/wall.png"), b"\x89PNG picture").expect("wallpaper");
+    fs::write(
+        dir.path().join("ck-config/wall.png"),
+        b"\x89PNG\r\n\x1a\npicture",
+    )
+    .expect("wallpaper");
     apply(&root).expect("apply");
     assert_eq!(
         fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
-        b"\x89PNG picture"
+        b"\x89PNG\r\n\x1a\npicture"
     );
 
     // The same stick is configured again with no wallpaper: the image's own shows again.
@@ -107,6 +111,16 @@ fn the_settings_file_is_never_copied_out_as_the_wallpaper() {
     apply(&root).expect("apply");
     assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
     assert_eq!(read(&dir, "etc/hostname"), "team-a-7\n");
+}
+
+#[test]
+fn an_alias_of_the_settings_file_is_not_a_picture() {
+    // FAT short names reach the settings file under another name.
+    let (dir, root) = stick(&settings(r#"{"wallpaper": "CONFIG~1.JSO"}"#));
+    let json = fs::read(dir.path().join("ck-config/config.json")).expect("settings");
+    fs::write(dir.path().join("ck-config/CONFIG~1.JSO"), json).expect("alias");
+    apply(&root).expect("apply");
+    assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
 }
 
 #[test]
@@ -224,5 +238,66 @@ fn the_title_is_welcome_without_a_display_name_and_a_huge_text_is_not_used() {
         read(&dir, "etc/hostname"),
         "team-a-7\n",
         "the rest is still applied"
+    );
+}
+
+#[test]
+fn bookmarks_and_home_page_taken_out_of_the_settings_go_back_to_the_images() {
+    let chosen = r#"{
+        "bookmarks": [{"title": "Docs", "url": "https://docs.example/"}],
+        "home_page": "https://judge.example/"
+    }"#;
+    let (dir, root) = stick(&settings(chosen));
+    apply(&root).expect("apply with bookmarks");
+    assert_eq!(
+        policies(&dir)["policies"]["Homepage"]["URL"],
+        "https://judge.example/"
+    );
+
+    // Only the home page is taken away: the image's bookmarks come back, the new home page stays.
+    let only_home = r#"{"home_page": "https://other.example/"}"#;
+    fs::write(
+        dir.path().join("ck-config/config.json"),
+        settings(only_home),
+    )
+    .expect("settings");
+    apply(&root).expect("apply with a home page only");
+    let json = policies(&dir);
+    assert_eq!(json["policies"]["Bookmarks"][0]["Title"], "Judge");
+    assert_eq!(
+        json["policies"]["Homepage"]["URL"],
+        "https://other.example/"
+    );
+
+    // Nothing chosen any more: the image's own policies are back.
+    fs::write(dir.path().join("ck-config/config.json"), settings("{}")).expect("settings");
+    apply(&root).expect("apply with nothing");
+    assert_eq!(
+        policies(&dir),
+        serde_json::from_str::<Value>(IMAGE_POLICIES).expect("image")
+    );
+}
+
+#[test]
+fn damaged_firefox_policies_are_not_kept_as_the_images_baseline() {
+    let chosen = r#"{"home_page": "https://judge.example/"}"#;
+    let (dir, root) = stick(&settings(chosen));
+    let live = dir
+        .path()
+        .join("usr/lib/firefox/distribution/policies.json");
+    fs::write(&live, "{ not json").expect("damage");
+    assert!(apply(&root).is_err());
+    assert!(
+        !dir.path()
+            .join("usr/lib/firefox/distribution/policies.json.ck-image")
+            .exists()
+    );
+
+    // Once the file is repaired the next boot works from it.
+    fs::write(&live, IMAGE_POLICIES).expect("repair");
+    apply(&root).expect("apply after the repair");
+    assert_eq!(
+        policies(&dir)["policies"]["Homepage"]["URL"],
+        "https://judge.example/"
     );
 }

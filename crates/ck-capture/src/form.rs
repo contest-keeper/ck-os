@@ -26,10 +26,12 @@ fn urlencoded(body: &[u8], wanted: &[&str]) -> Vec<(String, Vec<u8>)> {
     let mut found = Vec::new();
     for pair in body.split(|&b| b == b'&') {
         let mut halves = pair.splitn(2, |&b| b == b'=');
-        let name = String::from_utf8_lossy(halves.next().unwrap_or(b""));
+        // The site decodes names too, so `act%69on` is `action`.
+        let name = percent_decode(halves.next().unwrap_or(b""));
+        let name = String::from_utf8_lossy(&name).into_owned();
         let Some(value) = halves.next() else { continue };
-        if wanted.contains(&name.as_ref()) {
-            found.push((name.into_owned(), percent_decode(value)));
+        if wanted.contains(&name.as_str()) {
+            found.push((name, percent_decode(value)));
         }
     }
     found
@@ -114,15 +116,49 @@ fn split_part(part: &[u8]) -> Option<(String, &[u8])> {
         if line
             .to_ascii_lowercase()
             .starts_with("content-disposition:")
-            && let Some(start) = line.find(" name=\"")
         {
-            name = line[start + 7..].split('"').next().map(str::to_owned);
+            name = disposition_name(line);
         }
     }
     let value = &part[head_end + 4..];
     // The line break before the next boundary belongs to the boundary, not to the value.
     let value = value.strip_suffix(b"\r\n").unwrap_or(value);
     Some((name?, value))
+}
+
+/// The `name` parameter of a `Content-Disposition` line, in any letter case and with or without
+/// quotes or spaces around the `=`. `filename` is a different parameter.
+fn disposition_name(line: &str) -> Option<String> {
+    for parameter in split_unquoted(line).into_iter().skip(1) {
+        let Some((key, value)) = parameter.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("name") {
+            return Some(value.trim().trim_matches('"').to_owned());
+        }
+    }
+    None
+}
+
+/// Splits at semicolons that are not inside a quoted string, so a file name such as
+/// `"x; name=action"` stays one parameter. A backslash escapes the next character in quotes.
+fn split_unquoted(line: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (at, c) in line.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if quoted && c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if c == ';' && !quoted {
+            parts.push(&line[start..at]);
+            start = at + 1;
+        }
+    }
+    parts.push(&line[start..]);
+    parts
 }
 
 #[cfg(test)]
@@ -162,5 +198,39 @@ mod tests {
     fn other_content_types_and_a_missing_boundary_give_nothing() {
         assert_eq!(pick("application/json", b"{}", &["a"]), Vec::new());
         assert_eq!(pick("multipart/form-data", b"--b\r\n", &["a"]), Vec::new());
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_file_name_does_not_make_a_parameter() {
+        let line =
+            r#"Content-Disposition: form-data; filename="x; name=action"; name="sourceFile""#;
+        assert_eq!(disposition_name(line).as_deref(), Some("sourceFile"));
+    }
+
+    #[test]
+    fn names_are_found_however_they_are_written() {
+        let got = pick(
+            "application/x-www-form-urlencoded",
+            b"act%69on=a&x=1",
+            &["action"],
+        );
+        assert_eq!(text(&got, "action").as_deref(), Some("a"));
+
+        let body = "--b
+Content-Disposition: form-data; filename=\"x\"; NAME = \"action\"
+
+submitSolutionFormSubmitted
+--b--
+"
+        .replace('\n', "\r\n");
+        let got = pick(
+            "multipart/form-data; boundary=b",
+            body.as_bytes(),
+            &["action"],
+        );
+        assert_eq!(
+            text(&got, "action").as_deref(),
+            Some("submitSolutionFormSubmitted")
+        );
     }
 }

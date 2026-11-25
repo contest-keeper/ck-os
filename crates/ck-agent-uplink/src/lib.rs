@@ -119,7 +119,16 @@ impl Uplink {
 
     fn address(&self, path: &str) -> Option<String> {
         let base = self.config.settings.api.url.trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}{path}"))
+        if base.is_empty() {
+            return None;
+        }
+        let url = format!("{base}{path}");
+        // Events, recordings and heartbeats must not cross a network in plain text.
+        if !enrolment::permits_secret(&url) {
+            tracing::warn!("the Hub address must be https, so nothing is sent to it");
+            return None;
+        }
+        Some(url)
     }
 
     #[must_use]
