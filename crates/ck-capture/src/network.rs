@@ -127,7 +127,7 @@ impl Tail {
         }
     }
 
-    /// Goes back to an earlier place, so entries that could not be queued are read again.
+    /// Goes back to an earlier place, so a round that could not be queued at all is read again.
     pub fn rewind(&mut self, offset: u64) {
         self.offset = offset;
     }
@@ -201,17 +201,20 @@ pub fn follow(
         match tail.read_new() {
             Ok(entries) if entries.is_empty() => {}
             Ok(entries) => {
-                let mut queued = true;
+                let mut sent_any = false;
+                let mut failed = false;
                 for batch in batches(entries) {
                     if let Err(error) = events.send(EventKind::Network, json!({ "entries": batch }))
                     {
                         tracing::warn!("network entries could not be queued: {error}");
-                        queued = false;
+                        failed = true;
                         break;
                     }
+                    sent_any = true;
                 }
-                if !queued {
-                    // Read the round again next time: a repeat is better than a hole in the log.
+                if failed && !sent_any {
+                    // Nothing of the round was queued: read it again next time. After a partial
+                    // success the rest is dropped, or the queued batches would be sent twice.
                     tail.rewind(before);
                 } else if let Err(error) = std::fs::write(state, tail.offset().to_string()) {
                     tracing::warn!("cannot remember how far the log was read: {error}");
