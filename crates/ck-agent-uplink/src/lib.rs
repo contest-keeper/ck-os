@@ -209,9 +209,12 @@ impl Uplink {
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
         let started = Instant::now();
-        for (counter, event) in queue.pending()?.into_iter().take(MAX_PER_FLUSH) {
-            // Slow answers must not hold the loop for minutes either.
-            if sent > 0 && started.elapsed() >= FLUSH_BUDGET {
+        for (attempts, (counter, event)) in
+            queue.pending()?.into_iter().take(MAX_PER_FLUSH).enumerate()
+        {
+            // Slow answers must not hold the loop for minutes either. The first request always
+            // runs; refusals count as attempts too.
+            if attempts > 0 && started.elapsed() >= FLUSH_BUDGET {
                 break;
             }
             match self.post(url, &event.canonical_bytes()) {
