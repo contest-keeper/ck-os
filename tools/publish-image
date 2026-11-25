@@ -36,8 +36,8 @@ def refuse_test_build(info):
         problems.append("it has an empty root password (--debug-login)")
     if info.get("serial_console") != "0":
         problems.append("it has a serial console and a GRUB menu (--serial-console)")
-    if info.get("config_public_keys") != "hub":
-        problems.append(f"its settings keys are {info.get('config_public_keys')!r}, not the Hub's")
+    if info.get("config_public_keys") != "supplied":
+        problems.append(f"its settings keys are {info.get('config_public_keys')!r}, not a supplied key list")
     if problems:
         raise ValueError("this is a test build and must not be published: " + "; ".join(problems))
 

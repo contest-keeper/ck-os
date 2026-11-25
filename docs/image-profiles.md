@@ -17,7 +17,8 @@ and the QEMU smoke test boots it in UEFI, Secure Boot and BIOS. A real laptop bo
 ## Linux Mint (built, decisions open)
 
 Mint 22 is Ubuntu 24.04 with its own repository (`packages.linuxmint.com`, suite `wilma`). The existing apt build
-(mmdebstrap) can be reused, so the profile file itself is small. Three things stop it from being written now:
+(mmdebstrap) can be reused, so the profile file itself is small. Three points were open when it was written; the profile
+is built (below) in a way that settles none of them for the owners:
 
 1. **No snapshot.** Ubuntu's archive is pinned by snapshot time, which is what makes the build reproducible
    (`SOURCE_DATE_EPOCH`, the rootfs hash). Mint's repository has no snapshots. Options: mirror and pin the few Mint
@@ -37,13 +38,15 @@ settled by the code:
 
 - The base is the Ubuntu 24.04 snapshot, as in the default profile, because Mint 22 is Ubuntu 24.04. The same
   Ubuntu branding removal and the same checks apply. The image says Keeper OS and carries no Mint name, logo or artwork.
-- The Mint repository (`http://packages.linuxmint.com`, suite `wilma`) is wired in during the build only. Its keyring
+- The Mint repository (`http://ftp.fau.de/mint/packages`, a public mirror of packages.linuxmint.com, which refuses GitHub-hosted runners, suite `wilma`) is wired in during the build only. Its keyring
   is the `linuxmint-keyring` package, pinned by SHA-256, and the build refuses a keyring that does not hold the key
   that signs the `wilma` Release file (fingerprint `302F0738F465C1535761F965A6616109451BBBF2`, read from
   `Release.gpg` on 2026-11-25; an owner should confirm it out of band). `apt-get update` against the repository must
   succeed with that key. Then the source, the pin and the key are removed from the image again.
 - `MINT_PACKAGES` (override: `CK_MINT_PACKAGES`, comma separated) names what is installed from Mint, by name and
-  suite only (apt pin priority 100, so nothing else comes from there). It is empty. Which Mint packages a Mint
+  suite only. Apt pin priority 100 does not forbid anything: a dependency that Ubuntu does not have can still come
+  from Mint, so read the resolved package list (and where each package came from) before trusting the list as complete.
+  The written offer names the requested packages. The list is empty. Which Mint packages a Mint
   image should carry is the open decision; naming them is the whole change it needs. A build that installs from
   Mint is not reproducible (no snapshots), and the written offer says where Mint's source is.
 - Decision 1 (no snapshot) is therefore only half answered: the trust of the key is solved and checked by the build;

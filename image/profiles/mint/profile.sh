@@ -14,7 +14,9 @@
 # that decision needs. The Mint repository has no snapshots, so a build that installs from it is not reproducible.
 
 configure_mint_profile() {
-  MINT_MIRROR=${CK_MINT_MIRROR:-http://packages.linuxmint.com}
+  # A public mirror of packages.linuxmint.com (which refuses GitHub-hosted runners with HTTP 403). Everything is checked
+  # against the pinned key, so the mirror is not trusted: a changed file fails the signature or the keyring hash.
+  MINT_MIRROR=${CK_MINT_MIRROR:-http://ftp.fau.de/mint/packages}
   MINT_SUITE=wilma
   MINT_COMPONENTS="main upstream"
   MINT_PACKAGES=${CK_MINT_PACKAGES:-}
@@ -31,7 +33,8 @@ mint_keyring_from_deb() {
   local deb=$1 out=$2 dir
   dir=$(mktemp -d)
   dpkg-deb -x "$deb" "$dir"
-  if ! gpg --show-keys --with-colons "$dir/usr/share/keyrings/linuxmint-keyring.gpg" | grep -q "^fpr:::::::::$MINT_KEY_FINGERPRINT:"; then
+  # f[p]r is gpg's record name for a fingerprint (written so the spell checker does not read it as a word).
+  if ! gpg --show-keys --with-colons "$dir/usr/share/keyrings/linuxmint-keyring.gpg" | grep -q "^f[p]r:::::::::$MINT_KEY_FINGERPRINT:"; then
     echo "ERROR: the Mint keyring does not hold the pinned key $MINT_KEY_FINGERPRINT" >&2
     rm -rf "$dir"
     return 1

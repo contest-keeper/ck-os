@@ -11,7 +11,9 @@ echo "deb [signed-by=/usr/share/keyrings/linuxmint-keyring.gpg] $mirror $suite $
 # Mint's packages are never chosen by accident: apt takes one only when it is asked for by name and suite.
 printf 'Package: *\nPin: release n=%s\nPin-Priority: 100\n' "$suite" >"$root/etc/apt/preferences.d/ck-mint"
 # apt-get update fails on an unknown or bad signature, which proves the pinned key is what signs the repository.
-chroot "$root" apt-get -o Acquire::Retries=8 update
+# Error-Mode=any also fails it when the mirror stays unreachable after the retries; without it apt only warns and
+# exits 0, and the build would go on with a repository it never checked.
+chroot "$root" apt-get -o Acquire::Retries=8 -o APT::Update::Error-Mode=any update
 if [ -n "$packages" ]; then
   request=
   for package in $(echo "$packages" | tr ',' ' '); do request="$request $package/$suite"; done

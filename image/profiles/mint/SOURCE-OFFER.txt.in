@@ -8,8 +8,9 @@ package are in /usr/share/doc/<package>/copyright.
 
 The names Ubuntu and Xubuntu are trademarks of Canonical Ltd. and Linux Mint is a trademark of its owner. Keeper OS
 is not made, approved or endorsed by Canonical or by the Linux Mint project. This image carries no Linux Mint
-packages unless the package list keeper-os-@VERSION@.packages.txt shows a version ending in "linuxmint"; the Linux
-Mint repository (http://packages.linuxmint.com, suite wilma) was only used while building.
+packages except the ones named here, and what they need that Ubuntu does not have: @MINT_PACKAGES@ ("none" means no
+Linux Mint package was requested). The Linux Mint repository (http://packages.linuxmint.com, suite wilma) was only
+used while building.
 
 Where the source is
 -------------------
@@ -24,7 +25,7 @@ Where the source is
    With apt: add "deb-src https://snapshot.ubuntu.com/ubuntu/@SNAPSHOT@ noble main universe" (and the
    noble-updates and noble-security suites) to a sources list, then "apt-get source <package>=<version>".
 
-2. Linux Mint packages, if the package list shows any: the source is in the Linux Mint repository
+2. Linux Mint packages, if the list above names any: the source is in the Linux Mint repository
    (http://packages.linuxmint.com, "deb-src" for suite wilma) and at https://github.com/linuxmint.
 
 3. Programs added by the build, each downloaded as an exact file (URL and SHA-256 are in tools/build-image):

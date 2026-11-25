@@ -16,10 +16,14 @@ foreach ($file in @($Image, $Agent)) {
 $image = (Resolve-Path -LiteralPath $Image).Path
 $agent = (Resolve-Path -LiteralPath $Agent).Path
 $patch = Join-Path $root 'image\patch'
+# The patch also reads image/keeper/rootfs (a cloud image with a separate /boot gets those files too), so it must
+# sit next to it as in the repository.
+$keeper = Join-Path $root 'image\keeper'
 
 $wslImage = (wsl -e wslpath -a $image).Trim()
 $wslAgent = (wsl -e wslpath -a $agent).Trim()
 $wslPatch = (wsl -e wslpath -a $patch).Trim()
+$wslKeeper = (wsl -e wslpath -a $keeper).Trim()
 
 # A Windows checkout may have Windows line endings, which break shell scripts and unit files.
 # Work from a temporary copy with Unix line endings, so the checkout is never changed.
@@ -27,11 +31,13 @@ $script = @'
 set -euo pipefail
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-cp -r "$1" "$work/patch"
-find "$work/patch" -type f -exec sed -i 's/\r$//' {} +
-bash "$work/patch/apply-to-image.sh" --in-place "$2" --agent "$3"
+mkdir "$work/image"
+cp -r "$1" "$work/image/patch"
+cp -r "$4" "$work/image/keeper"
+find "$work/image" -type f -exec sed -i 's/\r$//' {} +
+bash "$work/image/patch/apply-to-image.sh" --in-place "$2" --agent "$3"
 '@
 # The script is passed on the command line with Unix line endings.
 $script = $script -replace "`r", ''
-wsl -e bash -c $script bash $wslPatch $wslImage $wslAgent
+wsl -e bash -c $script bash $wslPatch $wslImage $wslAgent $wslKeeper
 if ($LASTEXITCODE -ne 0) { throw "The patch failed or its verification failed (exit code $LASTEXITCODE)" }
