@@ -25,9 +25,9 @@ Where the source is
 2. Programs added by the build, each downloaded as an exact file (URL and SHA-256 are in tools/build-image):
 
      VSCodium @CODIUM_VERSION@ (MIT)        https://github.com/VSCodium/vscodium
-     clangd extension 0.6.0 (MIT)           https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd
+     clangd extension @CLANGD_VERSION@ (MIT)           https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd
      Firefox @FIREFOX_VERSION@ (MPL 2.0 and others)  https://packages.mozilla.org/apt/ (source: https://hg.mozilla.org/mozilla-central/)
-     Kotlin compiler 2.4.21 (Apache 2.0)    https://github.com/JetBrains/kotlin
+     Kotlin compiler @KOTLIN_VERSION@ (Apache 2.0)    https://github.com/JetBrains/kotlin
 
 3. Keeper OS's own parts (the agent, the image build scripts and settings, Apache 2.0):
 

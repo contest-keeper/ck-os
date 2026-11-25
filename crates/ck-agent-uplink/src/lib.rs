@@ -15,7 +15,7 @@ pub use recordings::RecordingError;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ck_agent_config::{PendingEnrolment, Root, read_applied_config};
 use ck_protocol::{
@@ -28,6 +28,10 @@ const CONFIG_COPY: &str = "etc/ck/config.json";
 /// Where events go. The Hub answers 409 for one it already has, which counts as sent.
 pub const EVENTS_PATH: &str = "/api/v1/events";
 /// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
+/// Events sent in one `flush`: each one is a request with its own connection.
+const MAX_PER_FLUSH: usize = 100;
+/// Time after which a flush stops starting new requests.
+const FLUSH_BUDGET: Duration = Duration::from_secs(20);
 const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
 /// The most the Hub may answer with. A few commands are a few kilobytes.
 const MAX_ANSWER_BYTES: u64 = 64 * 1024;
@@ -115,7 +119,16 @@ impl Uplink {
 
     fn address(&self, path: &str) -> Option<String> {
         let base = self.config.settings.api.url.trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}{path}"))
+        if base.is_empty() {
+            return None;
+        }
+        let url = format!("{base}{path}");
+        // Events, recordings and heartbeats must not cross a network in plain text.
+        if !enrolment::permits_secret(&url) {
+            tracing::warn!("the Hub address must be https, so nothing is sent to it");
+            return None;
+        }
+        Some(url)
     }
 
     #[must_use]
@@ -199,9 +212,20 @@ impl Uplink {
     ///
     /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
     /// sent. A 400, 413 or 422 means it never will: the event is set aside as `.refused`. An error is returned only when nothing was sent; events not sent stay in the queue.
+    ///
+    /// At most `MAX_PER_FLUSH` events go in one call, so a long backlog does not hold up the
+    /// heartbeats and commands that share the loop; the next round sends the rest.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
-        for (counter, event) in queue.pending()? {
+        let started = Instant::now();
+        for (attempts, (counter, event)) in
+            queue.pending()?.into_iter().take(MAX_PER_FLUSH).enumerate()
+        {
+            // Slow answers must not hold the loop for minutes either. The first request always
+            // runs; refusals count as attempts too.
+            if attempts > 0 && started.elapsed() >= FLUSH_BUDGET {
+                break;
+            }
             match self.post(url, &event.canonical_bytes()) {
                 Ok(_) | Err(Error::Rejected(409)) => {
                     queue.remove(counter)?;

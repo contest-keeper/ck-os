@@ -26,6 +26,11 @@ fn io(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> Error {
     move |source| Error::Io { context, source }
 }
 
+/// A path inside a QEMU option value: a comma is doubled, or QEMU reads the rest as a new option.
+fn escaped(path: &Path) -> String {
+    path.display().to_string().replace(',', ",,")
+}
+
 pub struct Options {
     pub qemu: PathBuf,
     pub image: PathBuf,
@@ -41,6 +46,7 @@ pub struct Machine {
     child: Child,
     qmp_port: u16,
     serial_log: PathBuf,
+    error_log: PathBuf,
 }
 
 impl Machine {
@@ -58,6 +64,7 @@ impl Machine {
             .and_then(|file| file.set_len(8 * 1024 * 1024))
             .map_err(io("creating the USB test disk"))?;
         let serial_log = options.work.join("serial.log");
+        let error_log = options.work.join("qemu.err");
         let qmp_port = free_port()?;
 
         let child = Command::new(&options.qemu)
@@ -73,19 +80,19 @@ impl Machine {
             .arg("-drive")
             .arg(format!(
                 "if=pflash,format=raw,readonly=on,file={}",
-                code.display()
+                escaped(&code)
             ))
             .arg("-drive")
-            .arg(format!("if=pflash,format=raw,file={}", vars.display()))
+            .arg(format!("if=pflash,format=raw,file={}", escaped(&vars)))
             .arg("-drive")
             .arg(format!(
                 "file={},format=raw,if=none,id=d0,snapshot=on,cache=unsafe,aio=threads",
-                options.image.display()
+                escaped(&options.image)
             ))
             .arg("-drive")
             .arg(format!(
                 "file={},format=raw,if=none,id=usb0",
-                usb_disk.display()
+                escaped(&usb_disk)
             ))
             .args(["-device", "virtio-blk-pci,drive=d0", "-device", "qemu-xhci"])
             .args(["-device", "usb-storage,drive=usb0"])
@@ -110,13 +117,14 @@ impl Machine {
             .arg("-serial")
             .arg(format!("file:{}", serial_log.display()))
             .stdout(Stdio::null())
-            .stderr(File::create(options.work.join("qemu.err")).map_err(io("creating qemu.err"))?)
+            .stderr(File::create(&error_log).map_err(io("creating qemu.err"))?)
             .spawn()
             .map_err(io(format!("starting {}", options.qemu.display())))?;
         Ok(Self {
             child,
             qmp_port,
             serial_log,
+            error_log,
         })
     }
 
@@ -127,6 +135,13 @@ impl Machine {
             Ok(None) => None,
             Err(error) => Some(error.to_string()),
         }
+    }
+
+    /// What QEMU wrote on its error output, for the reason it stopped.
+    pub fn error_text(&self) -> String {
+        fs::read(&self.error_log)
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+            .unwrap_or_default()
     }
 
     pub fn serial_text(&self) -> String {
@@ -244,4 +259,17 @@ fn write_png(ppm: &[u8], path: &Path) -> Result<(), Error> {
     writer
         .write_image_data(pixels)
         .map_err(|e| Error::Qmp(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_comma_in_a_path_is_doubled_for_qemu() {
+        assert_eq!(
+            escaped(Path::new("/tmp/a,b/disk.img")),
+            "/tmp/a,,b/disk.img"
+        );
+    }
 }

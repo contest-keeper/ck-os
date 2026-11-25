@@ -54,9 +54,16 @@ def main():
         lines.append("Could not refresh the connection.")
     elif not wait_for_squid():
         lines.append("The proxy did not come back. Tell a supervisor.")
+    domains = []
+    if not lines:
+        try:
+            domains = allowed_domains()
+        except OSError:
+            # The list is written by the agent from the Hub settings; a window with a traceback tells the team nothing.
+            lines.append("The list of allowed sites is missing. Tell a supervisor.")
     failed = bool(lines)
     if not failed:
-        for domain in allowed_domains():
+        for domain in domains:
             ok = answers(domain)
             failed = failed or not ok
             print("ck-refresh " + ("ok " if ok else "FAILED ") + domain)

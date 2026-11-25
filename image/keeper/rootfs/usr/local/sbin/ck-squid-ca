@@ -4,12 +4,18 @@
 #
 # The CA is short lived: a key copied from a stick's disk stops being useful after a few weeks. A CA with under
 # a week left is replaced at boot (before Squid starts) and the old one is taken out of the system trust.
+# --force replaces it whatever its dates say (ck-squid-ca-renew uses it for a CA that is not valid yet).
+# CK_ROOT is a prefix for the tests; it is empty on the stick.
 set -eu
-dir=/etc/ck/squid-ca
-trusted=/usr/local/share/ca-certificates/ck-squid-ca.crt
+root=${CK_ROOT:-}
+dir=$root/etc/ck/squid-ca
+trusted=$root/usr/local/share/ca-certificates/ck-squid-ca.crt
+ssl_db=$root/var/lib/squid/ssl_db
 renewed=
+force=
+[ "${1:-}" = --force ] && force=1
 
-if [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ] || ! openssl x509 -checkend 604800 -noout -in "$dir/ca.crt" >/dev/null; then
+if [ -n "$force" ] || [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ] || ! openssl x509 -checkend 604800 -noout -in "$dir/ca.crt" >/dev/null; then
   if [ -e "$trusted" ]; then
     rm -f "$trusted"
     update-ca-certificates
@@ -36,12 +42,25 @@ if [ ! -e "$trusted" ]; then
   # The system store is updated, but Java's keeps its entry under the same name, so replace it by hand.
   if [ -n "$renewed" ] && command -v keytool >/dev/null; then
     keytool -delete -cacerts -storepass changeit -alias debian:ck-squid-ca.pem >/dev/null 2>&1 || true
-    keytool -importcert -noprompt -cacerts -storepass changeit -alias debian:ck-squid-ca.pem -file "$dir/ca.crt" >/dev/null
+    # Java's store only matters for contestants' Java programs that call https; a failure here must not stop
+    # Squid (it Requires this unit), so it is reported and the boot goes on.
+    keytool -importcert -noprompt -cacerts -storepass changeit -alias debian:ck-squid-ca.pem -file "$dir/ca.crt" >/dev/null ||
+      echo "ck-squid-ca: could not add the CA to Java's certificate store" >&2
   fi
 fi
 
 # The folder is not made by the package; certgen runs as proxy and needs to create the database in it.
-install -d -o proxy -g proxy -m 0750 /var/lib/squid
-if [ ! -d /var/lib/squid/ssl_db ]; then
-  runuser -u proxy -- /usr/lib/squid/security_file_certgen -c -s /var/lib/squid/ssl_db -M 16MB
+install -d -o proxy -g proxy -m 0750 "$root/var/lib/squid"
+# Squid's certificate database holds leaf certificates signed by one CA; with another CA they would be served as they
+# are and no browser would accept them. The database therefore records which CA it was made for (marker file), and is
+# made again whenever that is not the current CA: after a renewal, and also on the next run when a renewal failed half
+# way. The new database is made next to the old one and takes its place only when it exists, so a failure never leaves
+# Squid without a database.
+ca_print=$(openssl x509 -in "$dir/ca.crt" -noout -fingerprint -sha256)
+if [ ! -d "$ssl_db" ] || [ "$(cat "$ssl_db.ca" 2>/dev/null || true)" != "$ca_print" ]; then
+  rm -rf "$ssl_db.new"
+  runuser -u proxy -- /usr/lib/squid/security_file_certgen -c -s "$ssl_db.new" -M 16MB
+  rm -rf "$ssl_db"
+  mv "$ssl_db.new" "$ssl_db"
+  printf '%s\n' "$ca_print" >"$ssl_db.ca"
 fi
