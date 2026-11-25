@@ -78,7 +78,8 @@ impl Uplink {
     }
 }
 
-fn permits_secret(url: &str) -> bool {
+/// Only https, or http to this machine (tests and a Hub on the same host), may carry signed data.
+pub(crate) fn permits_secret(url: &str) -> bool {
     let Ok(uri) = url.parse::<Uri>() else {
         return false;
     };
