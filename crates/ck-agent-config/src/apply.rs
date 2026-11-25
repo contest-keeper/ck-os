@@ -54,25 +54,8 @@ const GENERATED: &str = "# Written at boot by ck-agent from the admin tool setti
 pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let settings = &loaded.config.settings;
 
-    write(
-        root,
-        TEAM,
-        format!("{}\n", settings.team.trim()).as_bytes(),
-        0o644,
-    )?;
-    write(
-        root,
-        SITE,
-        format!("{}\n", settings.site.trim()).as_bytes(),
-        0o644,
-    )?;
-    write(
-        root,
-        RECORDING_CONF,
-        recording_conf(&loaded.config).as_bytes(),
-        0o644,
-    )?;
-
+    // First, so the radio's marker is kept even when a later file write fails: the agent blocks or unblocks
+    // the radio at this boot whatever else went wrong, and the next boot has to know which.
     if settings.block_bluetooth {
         write(
             root,
@@ -95,6 +78,25 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         }
         remove(root, BLOCK_BLUETOOTH)?;
     }
+
+    write(
+        root,
+        TEAM,
+        format!("{}\n", settings.team.trim()).as_bytes(),
+        0o644,
+    )?;
+    write(
+        root,
+        SITE,
+        format!("{}\n", settings.site.trim()).as_bytes(),
+        0o644,
+    )?;
+    write(
+        root,
+        RECORDING_CONF,
+        recording_conf(&loaded.config).as_bytes(),
+        0o644,
+    )?;
 
     if settings.block_usb_storage {
         write(root, BLOCK_USB_STORAGE, b"1\n", 0o644)?;
