@@ -40,8 +40,8 @@ class LockPanelTest(unittest.TestCase):
         self.assertEqual([plugin.get("name") for plugin in plugins], ["plugin-19"])
         self.assertIsNotNone(panel.find(".//value[@value='xfce4-web-browser.desktop']"))
 
-    def test_fails_when_the_panel_has_no_launcher_it_knows(self):
-        # XFCE renamed its launchers: nothing would be removed, so the build must stop instead of shipping a terminal.
+    def test_accepts_a_panel_without_any_launcher_to_remove(self):
+        # The Xubuntu panel has no terminal or finder launcher: nothing to remove is not an error.
         script = Path(__file__).resolve().parents[1] / "image/keeper/lock-panel.py"
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "default.xml"
@@ -50,8 +50,7 @@ class LockPanelTest(unittest.TestCase):
                   <value value="xfce4-web-browser.desktop"/>
                 </property></property></property></channel>''', encoding="utf-8")
             result = subprocess.run([sys.executable, script, config], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("lock-panel", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fails_when_a_renamed_terminal_launcher_stays_next_to_a_known_one(self):
         # The application finder is removed, but the terminal launcher was renamed: the build must still stop.

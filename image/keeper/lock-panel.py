@@ -33,12 +33,13 @@ for ids in panel.findall(".//property[@name='plugin-ids']"):
 
 # Guard: if XFCE renames a launcher, the panel would keep a terminal or the application finder and nothing else
 # would notice. Besides the exact names, any launcher left in the panel whose name says terminal, console or finder
-# stops the build, so a renamed one is caught as well, and so is a panel where nothing was removed at all.
+# stops the build, so a renamed one is caught as well. A panel without any such launcher (the Xubuntu panel has
+# none) is fine: nothing needs removing.
 suspicious = re.compile(r"terminal|console|appfinder|finder|xterm", re.IGNORECASE)
 leftovers = [item.get("value") for item in panel.iter("value")
              if item.get("value") in blocked or (item.get("value", "").endswith(".desktop") and suspicious.search(item.get("value")))]
-if leftovers or not removed_any:
-    sys.exit(f"lock-panel: expected to remove {sorted(blocked)} from the panel, removed any: {removed_any}, left: {leftovers}")
+if leftovers:
+    sys.exit(f"lock-panel: these launchers are still in the panel after the removal: {leftovers}")
 
 ET.indent(panel)
 panel.write(config, encoding="utf-8", xml_declaration=True)
