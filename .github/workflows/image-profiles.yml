@@ -89,7 +89,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring \
-            cryptsetup-bin systemd-ukify python3-pefile sbsigntool systemd-boot-efi virt-firmware
+            cryptsetup-bin systemd-ukify python3-pefile sbsigntool systemd-boot-efi python3-virt-firmware
       - name: Build the image
         env:
           BUILD_ARGS: ${{ matrix.build }}
