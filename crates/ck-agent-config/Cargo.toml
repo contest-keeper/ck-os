@@ -9,14 +9,21 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Lets a build take settings without a key list. Never on in a release image: tests turn it on
+# through the dev-dependency below, and a development build may name it by hand.
+unsigned-dev = []
+
 [dependencies]
 ck-crypto.workspace = true
 ck-protocol.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.0"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tracing = "0.1.44"
 
 [dev-dependencies]
+ck-agent-config = { path = ".", features = ["unsigned-dev"] }
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }

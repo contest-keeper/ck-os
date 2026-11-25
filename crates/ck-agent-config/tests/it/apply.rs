@@ -305,3 +305,35 @@ fn an_open_network_has_no_security_section_and_a_removed_network_removes_the_fil
         "the old network does not stay"
     );
 }
+
+#[test]
+fn an_empty_or_cut_off_private_key_file_is_never_taken_as_the_token() {
+    let (dir, root) = stick(SETTINGS);
+    let config_path = dir.path().join("ck-config");
+    fs::create_dir_all(&config_path).expect("ckconfig");
+    let enrolling = SETTINGS
+        .replace(r#""schema": 1"#, r#""schema": 3"#)
+        .replace(
+            r#""token": "the-secret""#,
+            r#""enrolment_code": "ABCD-EFGH-JKLM-NPQR-STUV""#,
+        );
+    fs::write(config_path.join("config.json"), &enrolling).expect("enrolment config");
+    load(&root).expect("first boot prepares the key");
+
+    let key = fs::read_dir(dir.path().join("var/lib/ck/enrolment"))
+        .expect("enrolment state")
+        .next()
+        .expect("one key")
+        .expect("entry")
+        .path();
+    for damaged in [
+        "", "
+", "abc",
+    ] {
+        fs::write(&key, damaged).expect("damage the key");
+        assert!(
+            load(&root).is_err(),
+            "{damaged:?} must not become the token"
+        );
+    }
+}
