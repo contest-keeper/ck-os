@@ -90,11 +90,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
       - name: Build the distribution image
+        # When the image is built again below, this smoke build is thrown away, so it is not compressed
+        # (compressing takes about 12 of its 19 minutes). Without the second build it is the one verified.
+        env:
+          SMOKE_COMPRESS: ${{ (vars.CK_IMAGE_PUBLISH_ENABLED == 'true' || inputs.tag != '') && '--no-compress' || '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/keeper-image"
+          # shellcheck disable=SC2086 # SMOKE_COMPRESS is empty or one flag
           sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console --profile "${{ matrix.profile }}"
+            --config-public-keys tools/ci-test-config-keys --serial-console $SMOKE_COMPRESS --profile "${{ matrix.profile }}"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
       # The smoke build above carries a CI test key, so it can never be published. A build that is
