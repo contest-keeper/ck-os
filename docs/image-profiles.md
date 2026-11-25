@@ -44,7 +44,9 @@ settled by the code:
   `Release.gpg` on 2026-11-25; an owner should confirm it out of band). `apt-get update` against the repository must
   succeed with that key. Then the source, the pin and the key are removed from the image again.
 - `MINT_PACKAGES` (override: `CK_MINT_PACKAGES`, comma separated) names what is installed from Mint, by name and
-  suite only (apt pin priority 100, so nothing else comes from there). It is empty. Which Mint packages a Mint
+  suite only. Apt pin priority 100 does not forbid anything: a dependency that Ubuntu does not have can still come
+  from Mint, so read the resolved package list (and where each package came from) before trusting the list as complete.
+  The written offer names the requested packages. The list is empty. Which Mint packages a Mint
   image should carry is the open decision; naming them is the whole change it needs. A build that installs from
   Mint is not reproducible (no snapshots), and the written offer says where Mint's source is.
 - Decision 1 (no snapshot) is therefore only half answered: the trust of the key is solved and checked by the build;

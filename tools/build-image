@@ -438,7 +438,7 @@ printf 'Keeper OS %s \\n \\l\n\n' "$VERSION" >"$MNT/etc/issue"
 printf 'Keeper OS %s\n' "$VERSION" >"$MNT/etc/issue.net"
 # The GPL source offer: next to the image (and in the CI upload) and inside the image.
 sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERSION@|$CODIUM_VERSION|g" \
-  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" -e "s|@CLANGD_VERSION@|$CLANGD_VERSION|g"   -e "s|@KOTLIN_VERSION@|$KOTLIN_VERSION|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
+  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" -e "s|@CLANGD_VERSION@|$CLANGD_VERSION|g"   -e "s|@KOTLIN_VERSION@|$KOTLIN_VERSION|g" -e "s|@MINT_PACKAGES@|${MINT_PACKAGES:-none}|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
 install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
 install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
 # The two pinned downloads ship no copyright file in the Debian places, so give them one. VSCodium's own licence

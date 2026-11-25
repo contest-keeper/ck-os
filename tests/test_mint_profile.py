@@ -53,7 +53,7 @@ class MintProfileTests(unittest.TestCase):
     def test_the_hook_checks_the_repository_and_leaves_nothing_of_it_in_the_image(self):
         result, calls, left = self.run_hook(CHROOT_LOGGING, "")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("apt-get -o Acquire::Retries=8 update", calls)
+        self.assertIn("apt-get -o Acquire::Retries=8 -o APT::Update::Error-Mode=any update", calls)
         self.assertNotIn("install", calls)
         self.assertEqual(left, [], "the Mint source, pin, key or package lists stayed in the image")
 
