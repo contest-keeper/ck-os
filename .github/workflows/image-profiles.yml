@@ -34,7 +34,7 @@ jobs:
   profile:
     name: ${{ matrix.profile }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -66,9 +66,20 @@ jobs:
       - name: Build the image
         run: |
           mkdir -p "$RUNNER_TEMP/image"
+          # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
+          # stuck package script or download shows up in the job log, then stop the job instead of waiting an hour.
+          (
+            sleep 1500
+            echo "::warning::the image build is still running after 25 minutes; process list follows"
+            ps -eo pid,ppid,etime,stat,wchan:24,args --forest | cut -c1-200
+            sudo ss -tnp 2>/dev/null | head -30
+            sudo pkill -f tools/build-image
+          ) &
+          watchdog=$!
           sudo tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys tools/ci-test-config-keys --serial-console --debug-login
+          kill "$watchdog"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: |
           image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
