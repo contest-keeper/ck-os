@@ -87,11 +87,15 @@ fn a_stick_without_a_number_counts_as_machine_1() {
 #[test]
 fn copies_the_wallpaper_from_the_stick_and_takes_it_away_when_none_is_chosen() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "wall.png"}"#));
-    fs::write(dir.path().join("ck-config/wall.png"), b"\x89PNG picture").expect("wallpaper");
+    fs::write(
+        dir.path().join("ck-config/wall.png"),
+        b"\x89PNG\r\n\x1a\npicture",
+    )
+    .expect("wallpaper");
     apply(&root).expect("apply");
     assert_eq!(
         fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
-        b"\x89PNG picture"
+        b"\x89PNG\r\n\x1a\npicture"
     );
 
     // The same stick is configured again with no wallpaper: the image's own shows again.
@@ -107,6 +111,16 @@ fn the_settings_file_is_never_copied_out_as_the_wallpaper() {
     apply(&root).expect("apply");
     assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
     assert_eq!(read(&dir, "etc/hostname"), "team-a-7\n");
+}
+
+#[test]
+fn an_alias_of_the_settings_file_is_not_a_picture() {
+    // FAT short names reach the settings file under another name.
+    let (dir, root) = stick(&settings(r#"{"wallpaper": "CONFIG~1.JSO"}"#));
+    let json = fs::read(dir.path().join("ck-config/config.json")).expect("settings");
+    fs::write(dir.path().join("ck-config/CONFIG~1.JSO"), json).expect("alias");
+    apply(&root).expect("apply");
+    assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
 }
 
 #[test]
