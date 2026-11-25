@@ -93,7 +93,7 @@ class MintKeyringCheckTests(unittest.TestCase):
         (package / "DEBIAN/control").write_text("Package: linuxmint-keyring\nVersion: 1\nArchitecture: all\n"
                                                  "Maintainer: test <t@example.test>\nDescription: test\n")
         with open(package / "usr/share/keyrings/linuxmint-keyring.gpg", "wb") as keyring:
-            subprocess.run(["gpg", "--homedir", str(home), "--export"], check=True, stdout=keyring)
+            subprocess.run(["gpg", "--homedir", str(home), "--export", "--armor"], check=True, stdout=keyring)
         deb = work / "keyring.deb"
         subprocess.run(["dpkg-deb", "--build", str(package), str(deb)], check=True, capture_output=True)
         return deb, fingerprint
@@ -113,6 +113,7 @@ class MintKeyringCheckTests(unittest.TestCase):
             self.assertFalse(out.exists(), "a keyring without the pinned key was copied")
             accepted = self.run_check(deb, fingerprint, out)
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertFalse(out.read_bytes().startswith(b"-----BEGIN"), "apt reads a .gpg keyring as binary only")
             self.assertTrue(out.exists())
 
 
