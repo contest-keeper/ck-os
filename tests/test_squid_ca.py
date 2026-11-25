@@ -35,6 +35,8 @@ class SquidCaTests(unittest.TestCase):
             (bin_dir / name).chmod(0o755)
         # install -d must still make the folder, because the script looks inside it afterwards.
         (bin_dir / "install").write_text(STUB + 'for last; do :; done; mkdir -p "$last"\n')
+        # certgen makes the database folder it is told to (-s DIR).
+        (bin_dir / "runuser").write_text(STUB + 'while [ $# -gt 0 ]; do [ "$1" = -s ] && mkdir -p "$2"; shift; done\n')
         self.bin = bin_dir
         self.calls = base / "calls.log"
         self.calls.write_text("")
@@ -42,9 +44,11 @@ class SquidCaTests(unittest.TestCase):
         self.ca = self.root / "etc/ck/squid-ca"
         self.ssl_db = self.root / "var/lib/squid/ssl_db"
 
-    def run_script(self, name, *args, synchronized=True, keytool_fails=False):
+    def run_script(self, name, *args, synchronized=True, keytool_fails=False, trust_update_fails=False):
         if keytool_fails:
             (self.bin / "keytool").write_text(STUB + "exit 1\n")
+        if trust_update_fails:
+            (self.bin / "update-ca-certificates").write_text(STUB + "exit 1\n")
         # timedatectl says whether the clock is set.
         (self.bin / "timedatectl").write_text(f"#!/bin/sh\necho {'yes' if synchronized else 'no'}\n")
         (self.bin / "timedatectl").chmod(0o755)
@@ -89,6 +93,22 @@ class SquidCaTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.ssl_db / "index.txt").exists(), "the old leaf certificates were kept")
         self.assertIn("security_file_certgen -c", self.calls.read_text(), "the database was not made again")
+
+    def test_a_failure_after_the_new_ca_is_made_leaves_the_old_database_in_place(self):
+        self.make_ca(days=1)
+        self.ssl_db.mkdir(parents=True)
+        (self.ssl_db / "index.txt").write_text("old database\n")
+        (self.root / "usr/local/share/ca-certificates/ck-squid-ca.crt").write_text("old")
+        result = self.run_script("ck-squid-ca", trust_update_fails=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.ssl_db / "index.txt").exists(), "Squid was left without its database")
+
+    def test_renew_starts_squid_again_when_the_new_ca_cannot_be_made(self):
+        self.make_ca(days=1)
+        (self.root / "usr/local/share/ca-certificates/ck-squid-ca.crt").write_text("old")
+        result = self.run_script("ck-squid-ca-renew", trust_update_fails=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("systemctl start squid.service", self.calls.read_text())
 
     def test_a_ca_that_is_fine_keeps_its_database(self):
         self.make_ca()

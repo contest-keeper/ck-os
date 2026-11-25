@@ -13,7 +13,11 @@ uid_file=$root/etc/ck/contestant-uid
 # ask, and without it the next run would stop here for good (and the contestant could never log in again).
 if uid=$(id -u "$user" 2>/dev/null); then
   printf '%s\n' "$uid" >"$uid_file.new"
+  # The file and the rename must both be on disk before userdel runs, or a power cut could keep the deletion and lose
+  # the saved uid.
+  sync "$uid_file.new"
   mv "$uid_file.new" "$uid_file"
+  sync -f "$uid_file"
 else
   [[ -r $uid_file ]] || {
     echo "ck-team-reset: $user does not exist and its uid was not saved" >&2

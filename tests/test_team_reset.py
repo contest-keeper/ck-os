@@ -78,6 +78,15 @@ class TeamResetTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn("useradd --uid 1000", self.calls_text())
 
+    def test_a_saved_uid_that_is_not_a_number_is_refused(self):
+        for text in ("abc\n", "1000; rm -rf /\n", "", "-1\n"):
+            with self.subTest(text):
+                (self.root / "etc/ck/contestant-uid").write_text(text)
+                result = self.run_reset(account=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("does not hold a uid", result.stderr)
+                self.assertNotIn("useradd", self.calls_text())
+
     def test_without_account_and_without_saved_uid_it_stops_with_a_message(self):
         result = self.run_reset(account=False)
         self.assertNotEqual(result.returncode, 0)
