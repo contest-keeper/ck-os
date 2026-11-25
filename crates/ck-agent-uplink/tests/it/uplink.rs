@@ -579,9 +579,45 @@ fn a_refusal_and_an_unreachable_hub_are_different_errors() {
 #[test]
 fn a_trailing_slash_in_the_server_address_is_not_doubled() {
     let dir = TempDir::new().expect("temp dir");
-    machine(dir.path(), "http://10.0.2.2:8088/");
+    machine(dir.path(), "https://hub.example.org/");
     let url = Uplink::load(dir.path()).expect("load").url().expect("url");
-    assert_eq!(url, "http://10.0.2.2:8088/api/v1/heartbeat");
+    assert_eq!(url, "https://hub.example.org/api/v1/heartbeat");
+}
+
+#[test]
+fn plain_http_to_another_machine_is_not_used() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://10.0.2.2:8088/");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    assert!(uplink.url().is_none());
+    assert!(uplink.events_url().is_none());
+}
+
+#[test]
+fn refused_files_are_capped_and_the_newest_are_kept() {
+    let hub = fake_hub(vec![]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let folder = dir.path().join("queue");
+    let queue = Queue::open(&folder).expect("open");
+    for n in 2..250 {
+        fs::write(folder.join(format!("event-{n:012}.refused")), "{}").expect("old file");
+    }
+    let event = push(&queue, &uplink, "ana");
+    assert_eq!(event.seq, 1);
+    let (counter, _) = queue.pending().expect("pending").remove(0);
+    queue.set_aside(counter).expect("set aside");
+    // The cap is applied when the queue is read next.
+    queue.pending().expect("pending");
+    let refused = fs::read_dir(&folder)
+        .expect("read")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "refused"))
+        .count();
+    assert_eq!(refused, 200);
+    assert!(folder.join("event-000000000249.refused").exists());
+    assert!(!folder.join("event-000000000002.refused").exists());
 }
 
 #[test]
@@ -834,7 +870,7 @@ fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
     let queue_dir = dir.path().join("queue");
     let queue = Queue::open(&queue_dir).expect("open");
     push(&queue, &uplink, "ana");
-    fs::write(queue_dir.join("event-000000000002.json"), "{ not an event").expect("damage");
+    fs::write(queue_dir.join("event-000000000009.json"), "{ not an event").expect("damage");
     push(&queue, &uplink, "bob");
 
     let events = queue.pending().expect("pending");
@@ -843,7 +879,7 @@ fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
         2,
         "the damaged file does not block the others"
     );
-    assert!(queue_dir.join("event-000000000002.bad").exists());
+    assert!(queue_dir.join("event-000000000009.bad").exists());
 
     let (stick, boot) = uplink.identity();
     let huge = json!({ "text": "x".repeat(20_000) });
