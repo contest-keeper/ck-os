@@ -8,6 +8,9 @@ use crate::{Error, Root, apply::write};
 
 const STATE: &str = "/var/lib/ck/enrolment";
 
+/// A generated stick token is far longer than this; anything shorter is damage.
+const MIN_KEY_CHARS: usize = 16;
+
 #[derive(Deserialize)]
 struct Schema {
     schema: u32,
@@ -61,7 +64,17 @@ pub(crate) fn resolve(
     let bootstrap: EnrolmentConfig = parse(raw)?;
     let fingerprint = ck_crypto::sha256_hex(raw);
     let key_path = root.path(&format!("{STATE}/{fingerprint}.key"));
-    let read_key = || fs::read_to_string(&key_path).map(Token::new);
+    let read_key = || {
+        let text = fs::read_to_string(&key_path)?;
+        // An empty or cut-off key file must not become the token.
+        if text.trim().len() < MIN_KEY_CHARS {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "the private enrolment key is empty or cut off",
+            ));
+        }
+        Ok(Token::new(text))
+    };
     let token = match read_key() {
         Err(error) if error.kind() == ErrorKind::NotFound && prepare_key => {
             let token = ck_crypto::generate_stick_token();

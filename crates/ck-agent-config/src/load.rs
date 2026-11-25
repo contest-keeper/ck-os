@@ -50,7 +50,16 @@ fn load_from(root: &Root, path: &str, keys: &Keys) -> Result<Loaded, Error> {
         .read_to_end(&mut raw)
         .map_err(|e| Error::io(format!("reading {path}"), e))?;
     if raw.len() as u64 > MAX_SETTINGS_BYTES {
-        return Err(Error::SettingsTooLarge(MAX_SETTINGS_BYTES));
+        // With a key list the file is refused like any other bad one, so the heartbeat reports it and
+        // the last verified settings stay. Without one (a development build) it is a plain error.
+        return Err(if matches!(keys, Keys::Trusted(_)) {
+            Error::SettingsRejected {
+                sha256: ck_crypto::sha256_hex(&raw),
+                reason: format!("the settings file is larger than {MAX_SETTINGS_BYTES} bytes"),
+            }
+        } else {
+            Error::SettingsTooLarge(MAX_SETTINGS_BYTES)
+        });
     }
     // Before anything is read out of the file: a refused file reaches nothing.
     if let Keys::Trusted(list) = keys {

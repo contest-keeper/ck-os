@@ -167,6 +167,7 @@ dependencies = [
 name = "ck-agent-config"
 version = "0.1.0"
 dependencies = [
+ "ck-agent-config",
  "ck-crypto",
  "ck-protocol",
  "proptest",
