@@ -10,7 +10,7 @@ use std::io::ErrorKind;
 use ck_protocol::{CONFIG_FILE, CONFIG_MOUNT_POINT, StickConfig};
 use serde_json::{Value, json};
 
-use crate::apply::write;
+use crate::apply::{keep_image_copy, restore_image_copy, write};
 use crate::error::Error;
 use crate::load::Loaded;
 use crate::root::Root;
@@ -142,9 +142,22 @@ fn looks_like_picture(bytes: &[u8]) -> bool {
 fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
     let branding = &config.settings.branding;
     if branding.bookmarks.is_empty() && branding.home_page.is_none() {
-        return Ok(());
+        // Bookmarks or a home page from an earlier boot go away with the settings.
+        return restore_image_copy(root, FIREFOX_POLICIES);
     }
-    let text = match fs::read_to_string(root.path(FIREFOX_POLICIES)) {
+    // Always built from the image's own policies, so a bookmark list or home page that was taken out of
+    // the settings does not stay from an earlier boot.
+    let image_copy = format!("{FIREFOX_POLICIES}.ck-image");
+    let source = if root
+        .path(&image_copy)
+        .try_exists()
+        .map_err(|e| Error::io(format!("checking {image_copy}"), e))?
+    {
+        image_copy.as_str()
+    } else {
+        FIREFOX_POLICIES
+    };
+    let text = match fs::read_to_string(root.path(source)) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             tracing::warn!(
@@ -152,7 +165,7 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
             );
             return Ok(());
         }
-        Err(e) => return Err(Error::io(format!("reading {FIREFOX_POLICIES}"), e)),
+        Err(e) => return Err(Error::io(format!("reading {source}"), e)),
     };
     let mut document: Value =
         serde_json::from_str(&text).map_err(|e| Error::PoliciesUnreadable(e.to_string()))?;
@@ -160,6 +173,8 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
         .get_mut("policies")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| Error::PoliciesUnreadable("there is no \"policies\" object".to_owned()))?;
+    // Only a file that reads as policies becomes the baseline: a damaged one must not be kept as the image's.
+    keep_image_copy(root, FIREFOX_POLICIES)?;
 
     if !branding.bookmarks.is_empty() {
         let bookmarks: Vec<Value> = branding
