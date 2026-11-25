@@ -1,0 +1,17 @@
+#!/bin/sh
+# initramfs-tools hook for the verity root (tools/build-image --verity): puts veritysetup and the verity driver into the
+# initramfs for scripts/local-top/ck-verity.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+  prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+# shellcheck disable=SC1091
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /usr/sbin/veritysetup /sbin
+manual_add_modules dm_mod dm_verity
+# The hash is SHA-256; the crypto driver may be built in or a module.
+manual_add_modules sha256_generic || true
