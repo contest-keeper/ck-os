@@ -109,8 +109,6 @@ fn batches(entries: Vec<Value>) -> Vec<Vec<Value>> {
 pub struct Tail {
     path: PathBuf,
     offset: u64,
-    /// Where the last round started in the file it read, after any rotation was noticed.
-    round_start: u64,
     /// The identity of the log file, to see a rotation that left a longer file.
     #[cfg(unix)]
     inode: Option<u64>,
@@ -123,16 +121,10 @@ impl Tail {
         Self {
             path,
             offset,
-            round_start: offset,
             #[cfg(unix)]
             inode: None,
             since,
         }
-    }
-
-    /// Goes back to an earlier place, so a round that could not be queued at all is read again.
-    pub fn rewind(&mut self) {
-        self.offset = self.round_start;
     }
 
     pub fn offset(&self) -> u64 {
@@ -160,7 +152,6 @@ impl Tail {
         if meta.len() < self.offset {
             self.offset = 0;
         }
-        self.round_start = self.offset;
         file.seek(SeekFrom::Start(self.offset))?;
         let mut chunk = Vec::new();
         file.take(READ_PER_ROUND).read_to_end(&mut chunk)?;
@@ -200,30 +191,32 @@ pub fn follow(
         .and_then(|text| text.trim().parse().ok())
         .unwrap_or(0);
     let mut tail = Tail::new(log.to_owned(), offset, since);
+    // Batches read but not queued yet, oldest first. Nothing new is read while there are some, so
+    // an entry is neither lost nor queued twice.
+    let mut waiting: std::collections::VecDeque<Vec<Value>> = std::collections::VecDeque::new();
     loop {
-        match tail.read_new() {
-            Ok(entries) if entries.is_empty() => {}
-            Ok(entries) => {
-                let mut sent_any = false;
-                let mut failed = false;
-                for batch in batches(entries) {
-                    if let Err(error) = events.send(EventKind::Network, json!({ "entries": batch }))
-                    {
-                        tracing::warn!("network entries could not be queued: {error}");
-                        failed = true;
-                        break;
-                    }
-                    sent_any = true;
-                }
-                if failed && !sent_any {
-                    // Nothing of the round was queued: read it again next time. After a partial
-                    // success the rest is dropped, or the queued batches would be sent twice.
-                    tail.rewind();
-                } else if let Err(error) = std::fs::write(state, tail.offset().to_string()) {
-                    tracing::warn!("cannot remember how far the log was read: {error}");
-                }
+        if waiting.is_empty() {
+            match tail.read_new() {
+                Ok(entries) => waiting.extend(batches(entries)),
+                Err(error) => tracing::warn!("cannot read the proxy log: {error}"),
             }
-            Err(error) => tracing::warn!("cannot read the proxy log: {error}"),
+        }
+        let mut progressed = false;
+        while let Some(batch) = waiting.front() {
+            if let Err(error) = events.send(EventKind::Network, json!({ "entries": batch })) {
+                tracing::warn!("network entries could not be queued: {error}");
+                break;
+            }
+            waiting.pop_front();
+            progressed = true;
+        }
+        // The place is kept only when everything read has been queued, so a restart cannot skip
+        // entries that were still waiting.
+        if progressed
+            && waiting.is_empty()
+            && let Err(error) = std::fs::write(state, tail.offset().to_string())
+        {
+            tracing::warn!("cannot remember how far the log was read: {error}");
         }
         std::thread::sleep(interval);
     }
