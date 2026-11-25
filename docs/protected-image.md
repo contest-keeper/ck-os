@@ -56,7 +56,7 @@ Boot off boots the stick but removes the protection.
 
 ## What the tests run
 
-`image-profiles.yml` builds the debian protected variants and the ubuntu one with a throw-away key and runs, with KVM:
+`image-profiles.yml` builds three protected variants on Debian (`debian-readonly`, `debian-verity`, `debian-signed`; the Ubuntu build is the same script but was not built protected in CI) with a throw-away key and runs, with KVM:
 
 - `layout` and `verity` (`tools/qemu-smoke`): the root is an overlay on a read-only partition, `/var` and `/home` come from
   `CKSTATE`, writes do not reach the disk, the root is a dm-verity device whose hash tree is on `CKVERITY`.

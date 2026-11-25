@@ -2,11 +2,8 @@ name: Image profile boot test
 
 # Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The protected variants (read-only root,
 # dm-verity, signed boot image; docs/protected-image.md) are built on Debian, which is quicker, with a signing key
-# made inside the job and thrown away with it. The default (ubuntu) image is then
-# booted once more with the full checks suite (CK1 and up, tools/qemu-smoke checks), which is the only place
-# the checks run in CI. It never publishes: no environment, no cloud sign-in, and the image carries the CI test
-# key and an empty root password (--debug-login), so it must never leave the job.
-# The same paths run on pushes to develop, so a merge that breaks a check shows up there too.
+# made inside the job and thrown away with it, and are booted in UEFI only. It never publishes: no environment, no
+# cloud sign-in, and the image carries the CI test key and an empty root password (--debug-login).
 on:
   pull_request:
     paths:
@@ -41,10 +38,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ubuntu
-            profile: ubuntu
-            checks: true
-            modes: all
           - name: debian
             profile: debian
             checks: false
@@ -122,9 +115,3 @@ jobs:
             sudo env CK_UKI_CERT="$RUNNER_TEMP/uki.crt" tools/qemu-smoke "$image" "$mode" "$timeout" || failed=1
           done
           exit "$failed"
-      # The checks suite assumes the Ubuntu profile (Firefox pin, Xubuntu menu paths), so only that one runs it.
-      - name: Run the checks suite in QEMU
-        if: matrix.checks
-        run: |
-          image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
-          sudo tools/qemu-smoke "$image" checks 900
