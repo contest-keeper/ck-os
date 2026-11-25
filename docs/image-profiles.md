@@ -17,7 +17,8 @@ and the QEMU smoke test boots it in UEFI, Secure Boot and BIOS. A real laptop bo
 ## Linux Mint (built, decisions open)
 
 Mint 22 is Ubuntu 24.04 with its own repository (`packages.linuxmint.com`, suite `wilma`). The existing apt build
-(mmdebstrap) can be reused, so the profile file itself is small. Three things stop it from being written now:
+(mmdebstrap) can be reused, so the profile file itself is small. Three points were open when it was written; the profile
+is built (below) in a way that settles none of them for the owners:
 
 1. **No snapshot.** Ubuntu's archive is pinned by snapshot time, which is what makes the build reproducible
    (`SOURCE_DATE_EPOCH`, the rootfs hash). Mint's repository has no snapshots. Options: mirror and pin the few Mint

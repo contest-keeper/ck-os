@@ -1,6 +1,7 @@
 """The Linux Mint profile: pinned repository key, and a build hook that leaves nothing of the repository behind."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -65,6 +66,47 @@ class MintProfileTests(unittest.TestCase):
     def test_the_hook_stops_when_apt_cannot_verify_the_repository(self):
         result, _, _ = self.run_hook(CHROOT_FAILING, "")
         self.assertNotEqual(result.returncode, 0)
+
+
+@unittest.skipUnless(shutil.which("gpg") and shutil.which("dpkg-deb"), "gpg and dpkg-deb are needed")
+class MintKeyringCheckTests(unittest.TestCase):
+    """mint_keyring_from_deb is the only thing that keeps a keyring without the pinned key out of the build."""
+
+    def make_deb(self, work):
+        home = work / "gnupg"
+        home.mkdir(mode=0o700)
+        subprocess.run(["gpg", "--homedir", str(home), "--batch", "--passphrase", "", "--quick-gen-key", "ck test <t@example.test>",
+                        "default", "default", "never"], check=True, capture_output=True)
+        listing = subprocess.run(["gpg", "--homedir", str(home), "--with-colons", "--list-keys"], check=True,
+                                 capture_output=True, text=True).stdout
+        fingerprint = next(line.split(":")[9] for line in listing.splitlines() if line.startswith("f" + "pr"))
+        package = work / "pkg"
+        (package / "usr/share/keyrings").mkdir(parents=True)
+        (package / "DEBIAN").mkdir()
+        (package / "DEBIAN/control").write_text("Package: linuxmint-keyring\nVersion: 1\nArchitecture: all\n"
+                                                 "Maintainer: test <t@example.test>\nDescription: test\n")
+        with open(package / "usr/share/keyrings/linuxmint-keyring.gpg", "wb") as keyring:
+            subprocess.run(["gpg", "--homedir", str(home), "--export"], check=True, stdout=keyring)
+        deb = work / "keyring.deb"
+        subprocess.run(["dpkg-deb", "--build", str(package), str(deb)], check=True, capture_output=True)
+        return deb, fingerprint
+
+    def run_check(self, deb, fingerprint, out):
+        script = f'source image/profiles/mint/profile.sh; MINT_KEY_FINGERPRINT={fingerprint}; mint_keyring_from_deb "{deb}" "{out}"'
+        return subprocess.run(["bash", "-c", script], cwd=BASE, capture_output=True, text=True)
+
+    def test_a_keyring_without_the_pinned_key_is_refused_and_one_with_it_is_taken(self):
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            deb, fingerprint = self.make_deb(work)
+            out = work / "out.gpg"
+            refused = self.run_check(deb, "0" * 40, out)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("does not hold the pinned key", refused.stderr)
+            self.assertFalse(out.exists(), "a keyring without the pinned key was copied")
+            accepted = self.run_check(deb, fingerprint, out)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertTrue(out.exists())
 
 
 if __name__ == "__main__":
