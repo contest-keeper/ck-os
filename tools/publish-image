@@ -7,8 +7,10 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import os
 import sys
 import tempfile
+import time
 
 
 INDEX = "images/images.json"
@@ -16,6 +18,14 @@ MAX_IMAGES = 200
 MAX_INDEX_BYTES = 1024 * 1024
 # The newest image of a family and the one before it (for a rollback); older ones are deleted after a publish.
 KEEP_PER_FAMILY = 2
+# Images of different families are published at the same time and each rewrites the one index. A writer that
+# finds the index changed under it reads it again and retries (blobs already uploaded are skipped by checksum).
+INDEX_ATTEMPTS = 5
+INDEX_RETRY_SECONDS = float(os.environ.get("CK_PUBLISH_RETRY_SECONDS", "5"))
+
+
+class IndexChanged(ValueError):
+    """The stored index changed or appeared between reading it and writing it."""
 
 
 def sha256(path):
@@ -121,7 +131,10 @@ def publish(account, entry, files):
             if not etag:
                 raise ValueError("the stored image index has no ETag")
             condition = ("--if-match", etag)
-            blob("download", INDEX, "--file", str(index), "--no-progress", *condition, "-o", "none")
+            try:
+                blob("download", INDEX, "--file", str(index), "--no-progress", *condition, "-o", "none")
+            except subprocess.CalledProcessError as error:
+                raise IndexChanged(f"the image index changed while it was read: {error}") from error
             if index.stat().st_size > MAX_INDEX_BYTES:
                 raise ValueError("the stored image index exceeds the Hub's size limit")
             document = json.loads(index.read_text(encoding="utf-8"))
@@ -158,8 +171,11 @@ def publish(account, entry, files):
         if not matches:
             index.write_bytes(data)
             # A concurrent writer must never overwrite a newer image index.
-            blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
-                 "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+            try:
+                blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
+                     "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+            except subprocess.CalledProcessError as error:
+                raise IndexChanged(f"the image index changed while it was written: {error}") from error
         # The Hub no longer lists these, so deleting their files cannot break a download. A failed delete only
         # leaves files behind, so it must not fail a publish that already went through.
         for image in removed:
@@ -180,7 +196,15 @@ def main():
     try:
         entry, files = prepare(args.directory, args.version, publishing=bool(args.account))
         if args.account:
-            publish(args.account, entry, files)
+            for attempt in range(1, INDEX_ATTEMPTS + 1):
+                try:
+                    publish(args.account, entry, files)
+                    break
+                except IndexChanged as error:
+                    if attempt == INDEX_ATTEMPTS:
+                        raise
+                    print(f"{error}; trying again ({attempt}/{INDEX_ATTEMPTS})", file=sys.stderr)
+                    time.sleep(INDEX_RETRY_SECONDS)
         else:
             print(json.dumps({"images": [entry]}, indent=2))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

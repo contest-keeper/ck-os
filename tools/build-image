@@ -198,7 +198,10 @@ if [[ -n $UKI_KEY || -n $UKI_CERT ]]; then
 fi
 
 WORK=$(mktemp -d)
-mkdir -p "$OUT" "$CACHE"
+# The .deb files apt downloads are kept here between builds (mmdebstrap's documented cache hooks below), so a
+# second build, or a CI run with a restored cache, does not fetch them again from the slow snapshot server.
+APT_CACHE=$CACHE/apt-$PROFILE
+mkdir -p "$OUT" "$CACHE" "$APT_CACHE"
 # fetch_pinned URL SHA256 NAME: downloads once into the cache, checks the hash every time (a changed or damaged
 # file stops the build) and copies the file to $WORK/NAME, the fixed name mmdebstrap's hooks copy in.
 fetch_pinned() {
@@ -298,7 +301,9 @@ mount "${LOOP}p2" "$MNT/boot/efi"
 # answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that
 # stalls without an error (seen on CI runners, for 20 minutes) is otherwise never retried.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
-mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"'   --aptopt='Acquire::http::Timeout "60"' --aptopt='Acquire::https::Timeout "60"' "${APT_PROFILE_OPTIONS[@]}" \
+mmdebstrap --skip=check/empty --skip=essential/unlink --variant=minbase --aptopt='Acquire::Retries "8"'   --aptopt='Acquire::http::Timeout "60"' --aptopt='Acquire::https::Timeout "60"' "${APT_PROFILE_OPTIONS[@]}" \
+  --setup-hook='mkdir -p "$1"/var/cache/apt/archives/' \
+  --setup-hook="sync-in $APT_CACHE /var/cache/apt/archives/" \
   --include=apt,systemd-sysv,$KERNEL_PACKAGES,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,network-manager-gnome,sudo,locales,ca-certificates,$DESKTOP_PACKAGES,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
@@ -307,6 +312,7 @@ mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' 
   --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
   --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
   "${PROFILE_HOOKS[@]}" \
+  --customize-hook="sync-out /var/cache/apt/archives $APT_CACHE" \
   "$SUITE" "$MNT" "${APT_SOURCES[@]}"
 
 echo "== install the Keeper files"
@@ -768,7 +774,8 @@ echo "== finish"
 cleanup
 trap - EXIT
 if [[ $COMPRESS -eq 1 ]]; then
-  zstd -T0 -19 -f "$IMG" -o "$IMG.zst"
+  # Level 12 instead of 19: about a third of the time, a slightly larger download.
+  zstd -T0 -12 -f "$IMG" -o "$IMG.zst"
   (cd "$OUT" && sha256sum "$(basename "$IMG.zst")" >"$(basename "$IMG.zst").sha256")
   echo "built $IMG.zst"
 else
