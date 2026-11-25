@@ -126,7 +126,14 @@ fn apply_wallpaper(root: &Root, loaded: &Loaded) -> Result<(), Error> {
 
 /// The first bytes of the picture formats a desktop shows as a wallpaper.
 fn looks_like_picture(bytes: &[u8]) -> bool {
-    const MAGIC: [&[u8]; 5] = [b"\x89PNG", b"\xFF\xD8\xFF", b"GIF8", b"BM", b"RIFF"];
+    const MAGIC: [&[u8]; 6] = [
+        b"\x89PNG\r\n\x1a\n",
+        b"\xFF\xD8\xFF",
+        b"GIF87a",
+        b"GIF89a",
+        b"BM",
+        b"RIFF",
+    ];
     MAGIC.iter().any(|magic| bytes.starts_with(magic))
 }
 

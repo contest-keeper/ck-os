@@ -90,7 +90,7 @@ fn the_wallpaper_comes_from_the_config_partition() {
         "ck-config/config.json",
         settings("A", Some("wall.png")),
     );
-    put(&dir, "ck-config/wall.png", b"\x89PNG new picture");
+    put(&dir, "ck-config/wall.png", b"\x89PNG\r\n\x1a\nnew picture");
     put(&dir, "etc/hostname", "ubuntu\n");
     put(&dir, "etc/hosts", "127.0.0.1 localhost\n");
     put(
@@ -104,6 +104,6 @@ fn the_wallpaper_comes_from_the_config_partition() {
     apply_branding(&root, &loaded).expect("applies");
     assert_eq!(
         fs::read(dir.path().join("etc/ck/team-wallpaper.png")).expect("copied"),
-        b"\x89PNG new picture"
+        b"\x89PNG\r\n\x1a\nnew picture"
     );
 }
