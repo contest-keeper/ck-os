@@ -20,7 +20,7 @@ STUBS = {
     "ipcs": '#!/bin/sh\nprintf "shmid perms cuid cgid uid gid\n7 600 contestant x contestant x\n8 600 root x root x\n"\n',
     "sleep": "#!/bin/sh\n",
 }
-for name in ("systemctl", "loginctl", "pkill", "userdel", "useradd", "passwd", "chage", "ipcrm", "chmod"):
+for name in ("systemctl", "loginctl", "pkill", "userdel", "useradd", "passwd", "chage", "ipcrm", "chmod", "sync"):
     STUBS[name] = LOG
 
 
@@ -77,6 +77,14 @@ class TeamResetTests(unittest.TestCase):
         again = self.run_reset(account=False)  # the account is gone, as after the power cut
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn("useradd --uid 1000", self.calls_text())
+
+    def test_the_saved_uid_is_synced_to_disk_before_the_account_is_deleted(self):
+        self.assertEqual(self.run_reset().returncode, 0)
+        calls = self.calls_text().splitlines()
+        syncs = [i for i, call in enumerate(calls) if call.startswith("sync ")]
+        userdel = calls.index(next(call for call in calls if call.startswith("userdel")))
+        self.assertEqual(len(syncs), 2, calls)
+        self.assertTrue(all(i < userdel for i in syncs), "a sync came after userdel")
 
     def test_a_saved_uid_that_is_not_a_number_is_refused(self):
         for text in ("abc\n", "1000; rm -rf /\n", "", "-1\n"):
