@@ -2,12 +2,40 @@
 # Reset the contestant to a clean account: end the session, delete the account and its home, recreate both from
 # the template (/etc/skel, which holds the Desktop launchers and the editor settings) and start the desktop again.
 # Runs as root from ck-team-reset.service, so closing a window cannot stop it half way. The uid stays the same.
+# CK_ROOT is a prefix for the tests; it is empty on the stick.
 set -euo pipefail
 
+root=${CK_ROOT:-}
 user=contestant
-uid=$(id -u "$user")
+uid_file=$root/etc/ck/contestant-uid
 
-rm -f /run/ck-reset-allowed
+# The uid is saved before the account is deleted. A power cut between userdel and useradd leaves no account to
+# ask, and without it the next run would stop here for good (and the contestant could never log in again).
+if uid=$(id -u "$user" 2>/dev/null); then
+  printf '%s\n' "$uid" >"$uid_file.new"
+  # The file and the rename must both be on disk before userdel runs, or a power cut could keep the deletion and lose
+  # the saved uid.
+  sync "$uid_file.new"
+  mv "$uid_file.new" "$uid_file"
+  sync -f "$uid_file"
+else
+  [[ -r $uid_file ]] || {
+    echo "ck-team-reset: $user does not exist and its uid was not saved" >&2
+    exit 1
+  }
+  uid=$(<"$uid_file")
+  [[ $uid =~ ^[0-9]+$ ]] || {
+    echo "ck-team-reset: $uid_file does not hold a uid" >&2
+    exit 1
+  }
+fi
+
+rm -f "$root/run/ck-reset-allowed"
+# A Hub screen lock freezes the contestant's slice and leaves its marker in /run/ck-screen. The reset ends the lock
+# as well: otherwise the new desktop would be refused (ck-screen pam) and ck-screen unlock could not find the old
+# session, so the stick would stay on the login screen until reboot.
+systemctl thaw "user-$uid.slice" 2>/dev/null || true
+rm -f "$root/run/ck-screen/session"
 loginctl terminate-user "$user" 2>/dev/null || true
 pkill -KILL -u "$user" 2>/dev/null || true
 for _ in $(seq 1 20); do
@@ -20,11 +48,20 @@ if pgrep -u "$user" >/dev/null; then
 fi
 
 userdel --remove "$user" 2>/dev/null || true
-rm -rf "/home/$user"
-find /tmp /var/tmp -xdev -user "$uid" -delete 2>/dev/null || true
+rm -rf "$root/home/${user:?}"
+find "$root/tmp" "$root/var/tmp" -xdev -user "$uid" -delete 2>/dev/null || true
+# What userdel leaves behind for the next team to find (threat doc row 14: nothing persists): shared memory and
+# message queues are files on their own tmpfs, SysV IPC lives in the kernel, and cron and linger keep a file per name.
+find "$root/dev/shm" "$root/dev/mqueue" -mindepth 1 -user "$uid" -delete 2>/dev/null || true
+for kind in m s q; do
+  # `ipcs -c` columns: id perms cuid cgid uid gid, where cuid (creator) and uid (owner) are a name or a number.
+  ipcs "-$kind" -c 2>/dev/null | awk -v u="$user" -v n="$uid" '$3 == u || $3 == n || $5 == u || $5 == n { print $1 }' |
+    while read -r id; do ipcrm "-$kind" "$id" 2>/dev/null || true; done
+done
+rm -f "$root/var/spool/cron/crontabs/$user" "$root/var/lib/systemd/linger/$user"
 
 useradd --uid "$uid" --create-home --shell /bin/bash "$user"
-chmod 0750 "/home/$user"
+chmod 0750 "$root/home/$user"
 passwd --lock "$user" >/dev/null
 chage --lastday "$(date -u +%F)" "$user"
 

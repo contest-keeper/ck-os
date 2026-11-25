@@ -2,7 +2,8 @@
 Description=Keeper OS: tell the Hub who logs in, what they submit and what the proxy carried
 # Squid sends its requests here. The shape of the traffic goes to the serial port only on a machine
 # that was started on purpose with the OEM string ck-observe=1; a real stick sends events only.
-# Squid carries on without this service if it is not running. It also reads Squid's access log and
+# Squid fails closed without this service (bypass=off, decision 4): the allowed sites answer with an error until it
+# is back. It also reads Squid's access log and
 # reports it in batches (host, path without query, answer, size), so it may read that log, which
 # belongs to Squid's own user, and nothing else beyond its own folders.
 After=network.target ck-config.service

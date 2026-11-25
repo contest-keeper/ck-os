@@ -135,9 +135,11 @@ FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
 CODIUM_VERSION='1.143.17232'
 CODIUM_URL='https://github.com/VSCodium/vscodium/releases/download/1.143.17232/codium_1.143.17232_amd64.deb'
 CODIUM_SHA256=988330df203f4d2dbfb9ee0052a0356a27af7c0a2a7ff606424c531ae4a7b538
-CLANGD_VSIX_URL='https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/0.6.0/file/llvm-vs-code-extensions.vscode-clangd-0.6.0.vsix'
+CLANGD_VERSION=0.6.0
+CLANGD_VSIX_URL="https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/$CLANGD_VERSION/file/llvm-vs-code-extensions.vscode-clangd-$CLANGD_VERSION.vsix"
 CLANGD_VSIX_SHA256=32030694fa6c0ef438f4e4219f84677cd32f603c7faa4c71a283efc1f5b51751
-KOTLIN_URL='https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip'
+KOTLIN_VERSION=2.4.21
+KOTLIN_URL="https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
 KOTLIN_SHA256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
 CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
 
@@ -436,7 +438,7 @@ printf 'Keeper OS %s \\n \\l\n\n' "$VERSION" >"$MNT/etc/issue"
 printf 'Keeper OS %s\n' "$VERSION" >"$MNT/etc/issue.net"
 # The GPL source offer: next to the image (and in the CI upload) and inside the image.
 sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERSION@|$CODIUM_VERSION|g" \
-  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
+  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" -e "s|@CLANGD_VERSION@|$CLANGD_VERSION|g"   -e "s|@KOTLIN_VERSION@|$KOTLIN_VERSION|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
 install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
 install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
 # The two pinned downloads ship no copyright file in the Debian places, so give them one. VSCodium's own licence
