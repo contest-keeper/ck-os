@@ -20,6 +20,10 @@ const SEEN_FILE: &str = "var/lib/ck/queue/commands-seen.json";
 /// More ids than this means something is flooding the stick with commands: it runs no more.
 const MAX_SEEN: usize = 1000;
 
+/// The reply to a heartbeat is not signed as a whole, so a man in the middle could pad it. A real
+/// reply carries a few commands; the rest wait for the next heartbeat (the Hub sends them again).
+const MAX_PER_REPLY: usize = 10;
+
 /// Does what a command says. The real one runs system tools; a test uses a fake.
 pub trait Executor {
     /// # Errors
@@ -47,7 +51,7 @@ impl Uplink {
         executor: &dyn Executor,
     ) -> usize {
         let mut ran = 0;
-        for signed in commands {
+        for signed in commands.iter().take(MAX_PER_REPLY) {
             let ack = self.run_command(signed, now, executor);
             if ack.result == AckResult::Ok {
                 ran += 1;
