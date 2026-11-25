@@ -1,0 +1,38 @@
+#!/bin/sh
+# shellcheck disable=SC2154 # rootmnt is set by initramfs-tools
+# Runs in the initramfs after the root filesystem is mounted read-only. Puts a writable layer in memory on top of
+# it, so every program that writes to /etc, /usr or /root (ck-config writes the host name and the Firefox policy,
+# ck-squid-ca makes the CA, systemd makes the machine id) still works, while nothing it writes reaches the disk
+# and a reboot gives back exactly the image. What must last (/var, /home) is bind-mounted from the CKSTATE
+# partition by /etc/fstab. Only active with ck.overlay=1 on the kernel command line.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+  prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+# shellcheck disable=SC1091
+. /scripts/functions
+
+# The shell here is busybox: plain POSIX only, so the word is looked for with case and not with grep options.
+read -r cmdline </proc/cmdline
+case " $cmdline " in
+  *" ck.overlay=1 "*) ;;
+  *) exit 0 ;;
+esac
+
+ro=/ck-ro
+rw=/ck-rw
+# $rootmnt is where initramfs-tools mounted the real root.
+mkdir -p "$ro" "$rw" || panic "ck-overlay: cannot make $ro and $rw"
+mount -t tmpfs -o mode=0755,size=50% tmpfs "$rw" || panic "ck-overlay: cannot mount the memory layer"
+mkdir "$rw/upper" "$rw/work" || panic "ck-overlay: cannot make the layer folders"
+mount -n -o move "$rootmnt" "$ro" || panic "ck-overlay: cannot move the root away"
+mount -t overlay -o "lowerdir=$ro,upperdir=$rw/upper,workdir=$rw/work" overlay "$rootmnt" ||
+  panic "ck-overlay: cannot mount the overlay"
+# The original root and the memory layer stay reachable in the running system, as they must not be unmounted.
+mkdir -p "$rootmnt/media/ck-ro" "$rootmnt/media/ck-rw"
+mount -n -o move "$ro" "$rootmnt/media/ck-ro" || panic "ck-overlay: cannot keep the original root"
+mount -n -o move "$rw" "$rootmnt/media/ck-rw" || panic "ck-overlay: cannot keep the memory layer"

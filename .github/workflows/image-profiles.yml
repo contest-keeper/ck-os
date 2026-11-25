@@ -1,9 +1,11 @@
 name: Image profile boot test
 
-# Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The default (ubuntu) image is then
-# booted once more with the full checks suite (CK1 and up, tools/qemu-smoke checks), which is the only place
-# the checks run in CI. It never publishes: no environment, no cloud sign-in, and the image carries the CI test
-# key and an empty root password (--debug-login), so it must never leave the job.
+# Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The default (ubuntu) image is then booted once
+# more with the full checks suite (CK1 and up, tools/qemu-smoke checks), which is the only place the checks run in CI.
+# The protected variants (read-only root, dm-verity, signed boot image; docs/protected-image.md) are built on Debian,
+# which is quicker, with a signing key made inside the job and thrown away with it, and are booted in UEFI only.
+# It never publishes: no environment, no cloud sign-in, and the image carries the CI test key and an empty root
+# password (--debug-login), so it must never leave the job.
 # The same paths run on pushes to develop, so a merge that breaks a check shows up there too.
 on:
   pull_request:
@@ -32,9 +34,9 @@ defaults:
 
 jobs:
   profile:
-    name: ${{ matrix.profile }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -43,15 +45,37 @@ jobs:
           # the image took over 20 minutes and never finished). A boot test does not need the pinned snapshot, so
           # it takes the archive mirror the runners themselves use. The published image (keeper-image.yml) still
           # builds from the snapshot.
-          - profile: ubuntu
+          - name: ubuntu
+            profile: ubuntu
             checks: true
+            modes: all
             mirror: http://azure.archive.ubuntu.com/ubuntu
-          - profile: debian
+          - name: debian
+            profile: debian
             checks: false
+            modes: all
             mirror: ''
-          - profile: mint
+          - name: mint
+            profile: mint
             checks: false
+            modes: all
             mirror: http://azure.archive.ubuntu.com/ubuntu
+          # Protected variants. UEFI only, so no BIOS boot.
+          - name: debian-readonly
+            profile: debian
+            checks: false
+            build: --read-only-root
+            modes: layout
+          - name: debian-verity
+            profile: debian
+            checks: false
+            build: --verity
+            modes: verity tamper
+          - name: debian-signed
+            profile: debian
+            checks: false
+            build: --verity --uki
+            modes: signed refused tamper
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -71,8 +95,11 @@ jobs:
       - name: Install Linux image and VM tools
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring
+          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring \
+            cryptsetup-bin systemd-ukify python3-pefile sbsigntool systemd-boot-efi python3-virt-firmware
       - name: Build the image
+        env:
+          BUILD_ARGS: ${{ matrix.build }}
         run: |
           mkdir -p "$RUNNER_TEMP/image"
           # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
@@ -89,14 +116,34 @@ jobs:
             sudo pkill -f tools/build-image
           ) &
           watchdog=$!
+          args=()
+          for arg in $BUILD_ARGS; do
+            if [[ $arg == --uki ]]; then
+              # A key for this job only: it signs the test image and goes away with the runner.
+              openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Keeper OS CI test boot key" \
+                -keyout "$RUNNER_TEMP/uki.key" -out "$RUNNER_TEMP/uki.crt"
+              args+=(--uki-key "$RUNNER_TEMP/uki.key" --uki-cert "$RUNNER_TEMP/uki.crt")
+            else
+              args+=("$arg")
+            fi
+          done
           sudo env CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console --debug-login
+            --config-public-keys tools/ci-test-config-keys --serial-console --debug-login "${args[@]}"
           kill "$watchdog"
-      - name: Boot UEFI, Secure Boot and BIOS in QEMU
+      - name: Boot in QEMU
+        env:
+          MODES: ${{ matrix.modes }}
         run: |
           image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
-          sudo tools/qemu-smoke "$image" all 360
+          failed=0
+          for mode in $MODES; do
+            # signed boots with the job's certificate enrolled in the firmware; refused and tamper must NOT reach a login.
+            timeout=360
+            [[ $mode == refused || $mode == tamper ]] && timeout=150
+            sudo env CK_UKI_CERT="$RUNNER_TEMP/uki.crt" tools/qemu-smoke "$image" "$mode" "$timeout" || failed=1
+          done
+          exit "$failed"
       # The checks suite assumes the Ubuntu profile (Firefox pin, Xubuntu menu paths), so only that one runs it.
       - name: Run the checks suite in QEMU
         if: matrix.checks
