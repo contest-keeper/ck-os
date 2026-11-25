@@ -47,7 +47,7 @@ class LockPanelTest(unittest.TestCase):
             config = Path(directory) / "default.xml"
             config.write_text('''<channel name="xfce4-panel"><property name="plugins">
                 <property name="plugin-17" value="launcher"><property name="items">
-                  <value value="xfce4-new-terminal.desktop"/>
+                  <value value="xfce4-web-browser.desktop"/>
                 </property></property></property></channel>''', encoding="utf-8")
             result = subprocess.run([sys.executable, script, config], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
