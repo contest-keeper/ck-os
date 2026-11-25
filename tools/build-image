@@ -199,9 +199,10 @@ fetch_pinned "$KOTLIN_URL" "$KOTLIN_SHA256" kotlin.zip
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
-# answers 503 for a while, so apt retries each download.
+# answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that
+# stalls without an error (seen on CI runners, for 20 minutes) is otherwise never retried.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
-mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' "${APT_PROFILE_OPTIONS[@]}" \
+mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"'   --aptopt='Acquire::http::Timeout "60"' --aptopt='Acquire::https::Timeout "60"' "${APT_PROFILE_OPTIONS[@]}" \
   --include=apt,systemd-sysv,$KERNEL_PACKAGES,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,network-manager-gnome,sudo,locales,ca-certificates,$DESKTOP_PACKAGES,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
