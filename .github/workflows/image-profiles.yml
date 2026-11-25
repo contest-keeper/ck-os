@@ -49,6 +49,9 @@ jobs:
           - profile: debian
             checks: false
             mirror: ''
+          - profile: mint
+            checks: false
+            mirror: http://azure.archive.ubuntu.com/ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

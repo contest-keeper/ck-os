@@ -20,7 +20,29 @@ def sha256(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-def prepare(directory, version):
+def read_build_info(path):
+    """The build-image record of how the image was built: profile, debug login, serial console, settings keys."""
+    info = {}
+    for line in path.read_text().splitlines():
+        key, _, value = line.partition("=")
+        info[key] = value
+    return info
+
+
+def refuse_test_build(info):
+    """Never publish an image built for the QEMU test (empty root password, serial console, CI test key)."""
+    problems = []
+    if info.get("debug_login") != "0":
+        problems.append("it has an empty root password (--debug-login)")
+    if info.get("serial_console") != "0":
+        problems.append("it has a serial console and a GRUB menu (--serial-console)")
+    if info.get("config_public_keys") != "supplied":
+        problems.append(f"its settings keys are {info.get('config_public_keys')!r}, not a supplied key list")
+    if problems:
+        raise ValueError("this is a test build and must not be published: " + "; ".join(problems))
+
+
+def prepare(directory, version, publishing=False):
     image_id = f"keeper-os-{version}"
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?", version):
         raise ValueError("expected a Keeper OS version such as 1.2.3 or 1.2.3-dev.42.1")
@@ -30,16 +52,22 @@ def prepare(directory, version):
     checksum = directory / f"{image.name}.sha256"
     packages = directory / f"{image_id}.packages.txt"
     offer = directory / "SOURCE-OFFER.txt"
-    for file in (image, checksum, packages, offer):
+    build = directory / f"{image_id}.build.txt"
+    for file in (image, checksum, packages, offer, build):
         if not file.is_file() or file.stat().st_size == 0:
             raise ValueError(f"missing or empty release file: {file}")
+    info = read_build_info(build)
+    if not re.fullmatch(r"[a-z]+", info.get("profile", "")):
+        raise ValueError(f"{build.name} does not name the image profile")
+    if publishing:
+        refuse_test_build(info)
     digest = sha256(image)
     if checksum.read_text().splitlines() != [f"{digest}  {image.name}"]:
         raise ValueError(f"checksum does not match {image.name}")
     entry = {
         "id": image_id, "name": "Keeper OS", "version": version, "filename": image.name,
         "blob": f"images/{image.name}", "size": image.stat().st_size, "sha256": digest,
-        "family": "ubuntu", "profile": "generic", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt",
+        "family": info["profile"], "profile": "generic", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt",
     }
     files = [
         (image, entry["blob"], "application/zstd", digest),
@@ -120,7 +148,7 @@ def main():
     parser.add_argument("--account", help="Azure storage account; omit to print the staged manifest")
     args = parser.parse_args()
     try:
-        entry, files = prepare(args.directory, args.version)
+        entry, files = prepare(args.directory, args.version, publishing=bool(args.account))
         if args.account:
             publish(args.account, entry, files)
         else:

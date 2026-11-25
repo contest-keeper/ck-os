@@ -1,0 +1,51 @@
+Keeper OS @VERSION@: offer of source code
+=========================================
+
+This profile builds Keeper OS from the packages of Ubuntu 24.04 (noble), the base of Linux Mint 22, and from a few
+other programs named below. Most of them are free software under the GNU General Public License (GPL), the GNU
+Lesser General Public License (LGPL) and similar licences. The licence text and copyright notice of every installed
+package are in /usr/share/doc/<package>/copyright.
+
+The names Ubuntu and Xubuntu are trademarks of Canonical Ltd. and Linux Mint is a trademark of its owner. Keeper OS
+is not made, approved or endorsed by Canonical or by the Linux Mint project. This image carries no Linux Mint
+packages except the ones named here, and what they need that Ubuntu does not have: @MINT_PACKAGES@ ("none" means no
+Linux Mint package was requested). The Linux Mint repository (http://packages.linuxmint.com, suite wilma) was only
+used while building.
+
+Where the source is
+-------------------
+
+1. Ubuntu packages. The exact package set of this image is the Ubuntu archive as it was at
+   @SNAPSHOT@ (suites noble, noble-updates and noble-security). The list of packages and versions is in
+   keeper-os-@VERSION@.packages.txt, delivered with the image. The source of every one of them is in the
+   same archive, for example:
+
+     https://snapshot.ubuntu.com/ubuntu/@SNAPSHOT@/pool/
+
+   With apt: add "deb-src https://snapshot.ubuntu.com/ubuntu/@SNAPSHOT@ noble main universe" (and the
+   noble-updates and noble-security suites) to a sources list, then "apt-get source <package>=<version>".
+
+2. Linux Mint packages, if the list above names any: the source is in the Linux Mint repository
+   (http://packages.linuxmint.com, "deb-src" for suite wilma) and at https://github.com/linuxmint.
+
+3. Programs added by the build, each downloaded as an exact file (URL and SHA-256 are in tools/build-image):
+
+     VSCodium @CODIUM_VERSION@ (MIT)        https://github.com/VSCodium/vscodium
+     clangd extension @CLANGD_VERSION@ (MIT)           https://open-vsx.org/extension/llvm-vs-code-extensions/vscode-clangd
+     Firefox @FIREFOX_VERSION@ (MPL 2.0 and others)  https://packages.mozilla.org/apt/ (source: https://hg.mozilla.org/mozilla-central/)
+     Kotlin compiler @KOTLIN_VERSION@ (Apache 2.0)    https://github.com/JetBrains/kotlin
+
+4. Keeper OS's own parts (the agent, the image build scripts and settings, Apache 2.0):
+
+     https://github.com/contest-keeper/ck-os
+
+Written offer
+-------------
+
+For at least three years after you received this image, we will give you, on request, the complete
+corresponding source code of any program in it that is under the GPL or LGPL, on a medium customarily used for
+software exchange, for no more than the cost of doing so. Make the request at:
+
+     https://github.com/contest-keeper/ck-os/issues
+
+and name the image version (@VERSION@) and the program.
