@@ -5,6 +5,15 @@
 #   and exits non-zero if any of them fails.
 #   MODE layout | verity: for an image built with --read-only-root (layout) or --verity (verity, UEFI only). Boots UEFI, logs in as root and checks the memory layer over the
 #   read-only root and the state partition. Needs --debug-login.
+#   MODE signed | refused | tamper: for an image built with --verity and --uki-key (CK_UKI_CERT is its certificate, PEM).
+#     signed:  Secure Boot with the Microsoft keys and the certificate added to the firmware's db, as an organizer's MOK
+#              enrolment would do; must boot (shim, then the signed UKI), report "Secure boot enabled" and pass the
+#              verity checks of the verity mode.
+#     refused: Secure Boot without the certificate; must NOT reach the login prompt, because shim refuses the UKI.
+#     tamper:  a copy of the image with the first block of the root partition overwritten, booted like verity mode; must
+#              NOT reach the login prompt, and the log must show the verity or mount failure. Takes CK_TAMPER_MODE=refused
+#              to run the tamper step on a refused boot instead. Needs sfdisk. Not run: shim with the MOK list (see
+#              docs/protected-image.md); the test enrols the certificate in the firmware's db instead.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
 #   user network and internet access (it fetches https://example.com through Squid). Linux only.
@@ -42,13 +51,27 @@ vars=$(mktemp)
 usbdisk=$(mktemp)
 # CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
 # command in the guest (checks mode), for looking into a failure.
-trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
+trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
+# The tamper mode boots a copy whose first root block is overwritten, so verity must refuse it. The copy is sparse.
+tampered=
+if [[ $mode == tamper ]]; then
+  tampered=$(mktemp)
+  cp --sparse=always "$image" "$tampered"
+  root_start=$(sfdisk -d "$tampered" | sed -n 's/.*start= *\([0-9]*\),.*name="CKROOT".*/\1/p')
+  [[ -n $root_start ]] || {
+    echo "FAIL [tamper]: the image has no partition named CKROOT (built without --read-only-root?)" >&2
+    exit 1
+  }
+  # 64 bytes of 0xFF over the ext4 superblock, which every mount reads first.
+  head -c 64 /dev/zero | tr '\0' '\377' | dd of="$tampered" bs=1 seek=$((root_start * 512 + 1024)) conv=notrunc status=none
+  image=$tampered
+fi
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
 args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
-if [[ $mode == checks || $mode == layout || $mode == verity ]]; then
+if [[ $mode == checks || $mode == layout || $mode == verity || $mode == signed ]]; then
   # A pipe lets this script type into the guest's serial console as well as read it.
   fifo=$(mktemp -u)
   mkfifo "$fifo.in" "$fifo.out"
@@ -60,10 +83,32 @@ if [[ $mode == checks || $mode == layout || $mode == verity ]]; then
 fi
 
 case $mode in
-  uefi | checks | layout | verity)
+  uefi | checks | layout | verity | tamper)
     cp "$ovmf_dir/OVMF_VARS_4M.fd" "$vars"
     args+=(-machine "q35,accel=$accel"
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.fd"
+      -drive "if=pflash,format=raw,file=$vars")
+    ;;
+  signed | refused)
+    # The same Secure Boot firmware as secureboot mode. For signed, the image's certificate joins the firmware's db
+    # (shim also accepts what db accepts), which is what an enrolled MOK entry gives a laptop.
+    if [[ $mode == signed ]]; then
+      command -v virt-fw-vars >/dev/null || {
+        echo "FAIL [signed]: virt-fw-vars (package virt-firmware) is needed to enrol the certificate" >&2
+        exit 1
+      }
+      [[ -r ${CK_UKI_CERT:-} ]] || {
+        echo "FAIL [signed]: set CK_UKI_CERT to the PEM certificate the image's boot image was signed with" >&2
+        exit 1
+      }
+      virt-fw-vars --input "$ovmf_dir/OVMF_VARS_4M.ms.fd" --output "$vars" --add-db 6b8a1c10-0000-4c4b-8000-0000000000c1 "$CK_UKI_CERT"
+    else
+      cp "$ovmf_dir/OVMF_VARS_4M.ms.fd" "$vars"
+    fi
+    # shellcheck disable=SC2054 # the commas belong to the -machine option string
+    args+=(-machine "q35,accel=$accel,smm=on"
+      -global driver=cfi.pflash01,property=secure,value=on
+      -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.secboot.fd"
       -drive "if=pflash,format=raw,file=$vars")
     ;;
   secureboot)
@@ -297,7 +342,7 @@ run_layout() {
     'echo L5_state_$(df --output=size -B1M /state | tail -1 | tr -d " ")_mb_fstab_root_$(grep -c " / " /etc/fstab)'
     'echo L_$((1+1))_DONE'
   )
-  if [[ $mode == verity ]]; then
+  if [[ $mode == verity || $mode == signed ]]; then
     # The root partition is a dm-verity device with the hash tree on CKVERITY, and the kernel was given the root hash.
     # shellcheck disable=SC2016
     cmds=(
@@ -323,24 +368,35 @@ run_layout() {
   expect 'L3_var_CKSTATE:/var_home_CKSTATE:/home' '/var and /home come from the state partition'
   expect 'L4_write_ok_not_on_disk' 'a write to the system works and does not reach the root partition'
   expect 'L5_state_[0-9]*_mb_fstab_root_0' 'the state partition has room and fstab has no line for /'
-  if [[ $mode == verity ]]; then
+  if [[ $mode == verity || $mode == signed ]]; then
     expect 'L6_verity_VERITY_verified_source_/dev/mapper/ckroot' 'the root is a dm-verity device whose blocks verified'
     expect 'L7_hashdev_CKVERITY_hashlen_64' 'the hash tree is on the CKVERITY partition and the kernel command line carries a 64 character root hash'
   fi
   return "$failed"
 }
 
+started=$SECONDS
+died=0
 for _ in $(seq 1 "$timeout_s"); do
-  if [[ $mode == layout || $mode == verity ]] && grep -q 'login:' "$log"; then
+  # These two must never reach a login prompt; the loop below waits the whole time to be sure.
+  if [[ $mode == refused || $mode == tamper ]] && grep -q 'login:' "$log"; then
+    echo "FAIL [$mode]: the login prompt was reached, but this boot must be refused" >&2
+    exit 1
+  fi
+  if [[ $mode == layout || $mode == verity || $mode == signed ]] && grep -q 'login:' "$log"; then
     rc=0
     run_layout || rc=1
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     if [[ $rc -eq 0 ]]; then
-      echo "PASS [layout, $accel]"
+      if [[ $mode == signed ]] && ! grep -qi 'secure boot enabled' "$log"; then
+        echo "FAIL [signed]: the checks passed but the kernel did not report Secure Boot enabled" >&2
+        exit 1
+      fi
+      echo "PASS [$mode, $accel]"
       exit 0
     fi
-    echo "FAIL [layout, $accel]; last console lines:" >&2
+    echo "FAIL [$mode, $accel]; last console lines:" >&2
     tail -40 "$log" >&2
     exit 1
   fi
@@ -367,10 +423,30 @@ for _ in $(seq 1 "$timeout_s"); do
     echo "PASS [$mode, $accel]: login prompt reached"
     exit 0
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then break; fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    # QEMU stopping by itself well before its time is up is a failure, also for a boot that must be refused.
+    ((SECONDS - started < timeout_s - 5)) && died=1
+    break
+  fi
   sleep 1
 done
 kill "$pid" 2>/dev/null || true
+if [[ $mode == refused || $mode == tamper ]]; then
+  if [[ $died -eq 1 ]]; then
+    echo "FAIL [$mode]: QEMU stopped by itself; last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
+  # No login in the whole time is the wanted result. A tampered root must also say why (verity or the failed mount),
+  # or the test would pass on a machine that never started.
+  if [[ $mode == tamper ]] && ! grep -qiE 'verity|i/o error|can.t find|ALERT' "$log"; then
+    echo "FAIL [tamper]: no login, but the log does not show a verity or mount failure; last console lines:" >&2
+    tail -30 "$log" >&2
+    exit 1
+  fi
+  echo "PASS [$mode, $accel]: no login prompt within ${timeout_s}s, as wanted"
+  exit 0
+fi
 echo "FAIL [$mode, $accel]: no login prompt within ${timeout_s}s; last console lines:" >&2
 tail -20 "$log" >&2
 exit 1
