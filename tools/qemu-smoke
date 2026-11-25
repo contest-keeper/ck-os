@@ -63,8 +63,13 @@ if [[ $mode == tamper ]]; then
     echo "FAIL [tamper]: the image has no partition named CKROOT (built without --read-only-root?)" >&2
     exit 1
   }
-  # 64 bytes of 0xFF over the ext4 superblock, which every mount reads first.
-  head -c 64 /dev/zero | tr '\0' '\377' | dd of="$tampered" bs=1 seek=$((root_start * 512 + 1024)) conv=notrunc status=none
+  # The 20th block of systemd's own program file, in the root's 4 KiB blocks (the partition starts on a block boundary).
+  victim=$(debugfs -R "bmap /usr/lib/systemd/systemd 20" "$tampered?offset=$((root_start * 512))" 2>/dev/null | tail -1)
+  [[ $victim =~ ^[0-9]+$ && $victim -gt 0 ]] || {
+    echo "FAIL [tamper]: could not find a block of /usr/lib/systemd/systemd in the root (got '$victim')" >&2
+    exit 1
+  }
+  head -c 4096 /dev/zero | tr '\0' '\377' | dd of="$tampered" bs=4096 seek=$((root_start * 512 / 4096 + victim)) conv=notrunc status=none
   image=$tampered
 fi
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
@@ -348,7 +353,7 @@ run_layout() {
     # The root partition is a dm-verity device with the hash tree on CKVERITY, and the kernel was given the root hash.
     # shellcheck disable=SC2016
     cmds=(
-      'echo L6_verity_$(veritysetup status ckroot | awk "/type:/ {print \$2}")_$(veritysetup status ckroot | awk "/status:/ {print \$2}")_source_$(findmnt -no SOURCE /media/ck-ro)'
+      'echo L6_verity_$(veritysetup status ckroot | awk "\$1==\"type:\" {print \$2}")_$(veritysetup status ckroot | awk "\$1==\"status:\" {print \$2}")_source_$(findmnt -no SOURCE /media/ck-ro)'
       'echo L7_hashdev_$(lsblk -no PARTLABEL $(veritysetup status ckroot | awk "/hash device:/ {print \$3}"))_hashlen_$(grep -o "ck.roothash=[0-9a-f]*" /proc/cmdline | cut -d= -f2 | tr -d "[:space:]" | wc -c)'
       "${cmds[@]}"
     )
@@ -427,7 +432,7 @@ for _ in $(seq 1 "$timeout_s"); do
   fi
   if ! kill -0 "$pid" 2>/dev/null; then
     # QEMU stopping by itself well before its time is up is a failure, also for a boot that must be refused.
-    ((SECONDS - started < timeout_s - 5)) && died=1
+    [[ $mode == refused ]] && ((SECONDS - started < timeout_s - 5)) && died=1
     break
   fi
   sleep 1
@@ -439,10 +444,16 @@ if [[ $mode == refused || $mode == tamper ]]; then
     tail -20 "$log" >&2
     exit 1
   fi
+  # shim refuses the image before the kernel starts, so nothing of the kernel may be in the log.
+  if [[ $mode == refused ]] && grep -q 'Linux version' "$log"; then
+    echo "FAIL [refused]: the kernel started, so the signed image was not refused; last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
   # No login in the whole time is the wanted result. A tampered root must also say why (verity or the failed mount),
   # or the test would pass on a machine that never started.
-  if [[ $mode == tamper ]] && ! grep -qiE 'verity|i/o error|can.t find|ALERT' "$log"; then
-    echo "FAIL [tamper]: no login, but the log does not show a verity or mount failure; last console lines:" >&2
+  if [[ $mode == tamper ]] && ! grep -qiE 'data block [0-9]+ is corrupted|verity.*corrupt|Attempted to kill init|I/O error' "$log"; then
+    echo "FAIL [tamper]: no login, but the log does not show the verity failure; last console lines:" >&2
     tail -30 "$log" >&2
     exit 1
   fi
