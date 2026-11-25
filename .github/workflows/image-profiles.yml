@@ -75,6 +75,7 @@ jobs:
           # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
           # stuck package script or download shows up in the job log, then stop the job instead of waiting an hour.
           (
+            set +e # the step runs with errexit and pipefail; a failed diagnostic must not skip the pkill below
             sleep 1500
             echo "::warning::the image build is still running after 25 minutes; process list follows"
             ps -eo pid,ppid,etime,stat,wchan:24,args --forest | cut -c1-200
