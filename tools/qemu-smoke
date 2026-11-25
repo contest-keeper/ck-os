@@ -3,6 +3,8 @@
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
 #   MODE: uefi | secureboot | bios | all (default all). "all" runs the three boot modes one after another
 #   and exits non-zero if any of them fails.
+#   MODE layout: for an image built with --read-only-root. Boots UEFI, logs in as root and checks the memory layer over the
+#   read-only root and the state partition. Needs --debug-login.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
 #   user network and internet access (it fetches https://example.com through Squid). Linux only.
@@ -46,7 +48,7 @@ trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$va
 args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
-if [[ $mode == checks ]]; then
+if [[ $mode == checks || $mode == layout ]]; then
   # A pipe lets this script type into the guest's serial console as well as read it.
   fifo=$(mktemp -u)
   mkfifo "$fifo.in" "$fifo.out"
@@ -58,7 +60,7 @@ if [[ $mode == checks ]]; then
 fi
 
 case $mode in
-  uefi | checks)
+  uefi | checks | layout)
     cp "$ovmf_dir/OVMF_VARS_4M.fd" "$vars"
     args+=(-machine "q35,accel=$accel"
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.fd"
@@ -275,7 +277,60 @@ run_checks() {
   return "$failed"
 }
 
+# Layout of a --read-only-root image, seen from inside: the root is an overlay whose lower layer is the read-only
+# root partition and whose upper layer is memory, /var and /home come from the state partition, and a write to the
+# system is possible (so the programs that write to /etc and /usr still work) but is not on the disk.
+run_layout() {
+  exec 3<>"$fifo.in"
+  local cr=$'\r' cmd
+  printf 'root%s' "$cr" >&3
+  wait_for 'root@' 60 || {
+    echo "FAIL [layout]: no root shell on the serial console (image built without --debug-login?)" >&2
+    return 1
+  }
+  # shellcheck disable=SC2016
+  local -a cmds=(
+    'echo L1_root_$(findmnt -no FSTYPE /)_lower_$(findmnt -no OPTIONS /media/ck-ro | cut -d, -f1)_$(findmnt -no LABEL /media/ck-ro 2>/dev/null || lsblk -no LABEL $(findmnt -no SOURCE /media/ck-ro))'
+    'echo L2_memory_$(findmnt -no FSTYPE /media/ck-rw)_state_$(findmnt -no FSTYPE,OPTIONS /state | cut -d, -f1 | tr " " _)'
+    'echo L3_var_$(findmnt -no LABEL,FSROOT /var | tr " " :)_home_$(findmnt -no LABEL,FSROOT /home | tr " " :)'
+    'touch /usr/ck-layout-probe && echo L4_write_ok_$(test -e /media/ck-ro/usr/ck-layout-probe && echo ON_DISK || echo not_on_disk)'
+    'echo L5_state_$(df --output=size -B1M /state | tail -1 | tr -d " ")_mb_fstab_root_$(grep -c " / " /etc/fstab)'
+    'echo L_$((1+1))_DONE'
+  )
+  for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
+  wait_for 'L_2_DONE' 120 || {
+    echo "FAIL [layout]: the guest did not finish the checks" >&2
+    return 1
+  }
+  local failed=0
+  expect() { # expect MARKER DESCRIPTION
+    if grep -q "$1" "$log"; then echo "ok   $2"; else
+      echo "FAIL $2 (wanted $1)" >&2
+      failed=1
+    fi
+  }
+  expect 'L1_root_overlay_lower_ro_CKROOT' 'the root is an overlay over the CKROOT partition, mounted read-only'
+  expect 'L2_memory_tmpfs_state_ext4' 'the memory layer is a tmpfs and CKSTATE is ext4'
+  expect 'L3_var_CKSTATE:/var_home_CKSTATE:/home' '/var and /home come from the state partition'
+  expect 'L4_write_ok_not_on_disk' 'a write to the system works and does not reach the root partition'
+  expect 'L5_state_[0-9]*_mb_fstab_root_0' 'the state partition has room and fstab has no line for /'
+  return "$failed"
+}
+
 for _ in $(seq 1 "$timeout_s"); do
+  if [[ $mode == layout ]] && grep -q 'login:' "$log"; then
+    rc=0
+    run_layout || rc=1
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    if [[ $rc -eq 0 ]]; then
+      echo "PASS [layout, $accel]"
+      exit 0
+    fi
+    echo "FAIL [layout, $accel]; last console lines:" >&2
+    tail -40 "$log" >&2
+    exit 1
+  fi
   if [[ $mode == checks ]] && grep -q 'login:' "$log"; then
     rc=0
     run_checks || rc=1
