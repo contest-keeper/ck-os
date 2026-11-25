@@ -304,12 +304,35 @@ fn parse_reply(answer: &[u8]) -> HeartbeatReply {
         .commands
         .into_iter()
         .filter_map(|value| {
+            let id = value["command"]["id"].as_str().unwrap_or("").to_owned();
             serde_json::from_value(value)
-                .inspect_err(|error| tracing::warn!("a command of the Hub is skipped: {error}"))
+                .inspect_err(|error| {
+                    if first_skip(&id) {
+                        tracing::warn!(command = %id, "a command of the Hub is skipped: {error}");
+                    }
+                })
                 .ok()
         })
         .collect();
     HeartbeatReply { commands }
+}
+
+/// Whether this is the first time a skipped command is seen, so the Hub resending it at every
+/// heartbeat logs it once. The list is small and forgets the oldest ids.
+fn first_skip(id: &str) -> bool {
+    const REMEMBERED: usize = 64;
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if seen.iter().any(|old| old == id) {
+        return false;
+    }
+    if seen.len() == REMEMBERED {
+        seen.remove(0);
+    }
+    seen.push(id.to_owned());
+    true
 }
 
 /// Where `ck-recorder` writes what it is doing: `waiting`, `recording` or `lowdisk`.
@@ -391,4 +414,21 @@ fn save_sequence(root: &Path, boot_id: &str, seq: u64) -> Result<(), Error> {
         &path,
         &serde_json::to_vec(&saved).expect("a sequence serializes"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_skip;
+
+    #[test]
+    fn a_skipped_command_is_reported_once_and_the_list_stays_small() {
+        assert!(first_skip("skip-a"));
+        assert!(!first_skip("skip-a"));
+        for n in 0..200 {
+            first_skip(&format!("flood-{n}"));
+        }
+        // The oldest id was forgotten, so it is reported again; the newest is still remembered.
+        assert!(first_skip("skip-a"));
+        assert!(!first_skip("flood-199"));
+    }
 }
