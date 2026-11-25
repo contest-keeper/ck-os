@@ -295,9 +295,10 @@ fi
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
-# answers 503 for a while, so apt retries each download.
+# answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that
+# stalls without an error (seen on CI runners, for 20 minutes) is otherwise never retried.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
-mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' "${APT_PROFILE_OPTIONS[@]}" \
+mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"'   --aptopt='Acquire::http::Timeout "60"' --aptopt='Acquire::https::Timeout "60"' "${APT_PROFILE_OPTIONS[@]}" \
   --include=apt,systemd-sysv,$KERNEL_PACKAGES,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,network-manager-gnome,sudo,locales,ca-certificates,$DESKTOP_PACKAGES,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
@@ -331,9 +332,10 @@ install_payload() {
 install_payload "$REPO/image/patch/rootfs" patch
 # Files that exist only on Keeper OS: the Squid settings and the per-stick CA service.
 install_payload "$REPO/image/keeper/rootfs" keeper
-if [[ $PROFILE == debian ]]; then
-  cp -a "$MNT/etc/xdg/xdg-xubuntu/." "$MNT/etc/xdg/"
-fi
+# The contestant's session is the plain xfce session (50-ck.conf), which reads only /etc/xdg, not the xdg-xubuntu
+# directory that the xubuntu session adds in front. The restricted menu and shortcut files must therefore sit in
+# /etc/xdg itself, on every profile (CK60 compares them).
+cp -a "$MNT/etc/xdg/xdg-xubuntu/." "$MNT/etc/xdg/"
 printf 'keeper-os %s\n' "$VERSION" >"$MNT/etc/ck/image-version"
 # Forge reads this from the raw image before offering first-boot enrolment.
 if [[ -r $AGENT ]] && grep -aFq 'Supports Keeper OS enrolment schema 3.' "$AGENT"; then

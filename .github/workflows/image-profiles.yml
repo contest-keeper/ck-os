@@ -1,9 +1,12 @@
 name: Image profile boot test
 
-# Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The protected variants (read-only root,
-# dm-verity, signed boot image; docs/protected-image.md) are built on Debian, which is quicker, with a signing key
-# made inside the job and thrown away with it, and are booted in UEFI only. It never publishes: no environment, no
-# cloud sign-in, and the image carries the CI test key and an empty root password (--debug-login).
+# Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The default (ubuntu) image is then booted once
+# more with the full checks suite (CK1 and up, tools/qemu-smoke checks), which is the only place the checks run in CI.
+# The protected variants (read-only root, dm-verity, signed boot image; docs/protected-image.md) are built on Debian,
+# which is quicker, with a signing key made inside the job and thrown away with it, and are booted in UEFI only.
+# It never publishes: no environment, no cloud sign-in, and the image carries the CI test key and an empty root
+# password (--debug-login), so it must never leave the job.
+# The same paths run on pushes to develop, so a merge that breaks a check shows up there too.
 on:
   pull_request:
     paths:
@@ -38,14 +41,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The Ubuntu archive snapshot server answers slowly to the runners at times (the package install of
+          # the image took over 20 minutes and never finished). A boot test does not need the pinned snapshot, so
+          # it takes the archive mirror the runners themselves use. The published image (keeper-image.yml) still
+          # builds from the snapshot.
+          - name: ubuntu
+            profile: ubuntu
+            checks: true
+            modes: all
+            mirror: http://azure.archive.ubuntu.com/ubuntu
           - name: debian
             profile: debian
             checks: false
             modes: all
+            mirror: ''
           - name: mint
             profile: mint
             checks: false
             modes: all
+            mirror: http://azure.archive.ubuntu.com/ubuntu
           # Protected variants. UEFI only, so no BIOS boot.
           - name: debian-readonly
             profile: debian
@@ -88,6 +102,20 @@ jobs:
           BUILD_ARGS: ${{ matrix.build }}
         run: |
           mkdir -p "$RUNNER_TEMP/image"
+          # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
+          # stuck package script or download shows up in the job log, then stop the job instead of waiting an hour.
+          (
+            set +e # the step runs with errexit and pipefail; a failed diagnostic must not skip the pkill below
+            sleep 1500
+            echo "::warning::the image build is still running after 25 minutes; process list follows"
+            ps -eo pid,ppid,etime,stat,wchan:24,args --forest | cut -c1-200
+            sudo ss -tinp 2>/dev/null | grep -A1 ':443' | head -30
+            # The file apt is fetching right now, and how much of it has arrived.
+            sudo find /tmp -path '*/var/cache/apt/archives/partial/*' -ls 2>/dev/null | head
+            sudo find /tmp -path '*/var/cache/apt/archives/*.deb' -newermt '-2 minutes' -ls 2>/dev/null | head
+            sudo pkill -f tools/build-image
+          ) &
+          watchdog=$!
           args=()
           for arg in $BUILD_ARGS; do
             if [[ $arg == --uki ]]; then
@@ -99,9 +127,10 @@ jobs:
               args+=("$arg")
             fi
           done
-          sudo tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
+          sudo env CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys tools/ci-test-config-keys --serial-console --debug-login "${args[@]}"
+          kill "$watchdog"
       - name: Boot in QEMU
         env:
           MODES: ${{ matrix.modes }}
@@ -115,3 +144,9 @@ jobs:
             sudo env CK_UKI_CERT="$RUNNER_TEMP/uki.crt" tools/qemu-smoke "$image" "$mode" "$timeout" || failed=1
           done
           exit "$failed"
+      # The checks suite assumes the Ubuntu profile (Firefox pin, Xubuntu menu paths), so only that one runs it.
+      - name: Run the checks suite in QEMU
+        if: matrix.checks
+        run: |
+          image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
+          sudo tools/qemu-smoke "$image" checks 900
