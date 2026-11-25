@@ -162,7 +162,7 @@ run_checks() {
     'runuser -u contestant -- systemctl start ck-refresh-connection.service >/dev/null 2>&1; echo CK32_refreshunit_$?'
     'runuser -u contestant -- systemctl --no-ask-password restart squid.service >/dev/null 2>&1; echo CK33_squidrestart_$?'
     'runuser -u contestant -- ck-refresh-connection --no-gui; echo CK34_refresh_$?'
-    'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK44_power_$(p org.freedesktop.login1.power-off)_reboot_$(p org.freedesktop.login1.reboot)_firmware_$(p org.freedesktop.login1.set-reboot)_suspend_$(p org.freedesktop.login1.suspend)'
+    'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK44_power_$(p org.freedesktop.login1.power-off)_reboot_$(p org.freedesktop.login1.reboot)_firmware_$(p org.freedesktop.login1.set-reboot-to-firmware-setup)_suspend_$(p org.freedesktop.login1.suspend)'
     ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
     'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
