@@ -92,7 +92,7 @@ class ImagePublishTests(unittest.TestCase):
         azure.write_text(FAKE_AZ)
         azure.chmod(0o755)
 
-    def write_build_info(self, profile="ubuntu", debug_login="0", serial_console="0", config_public_keys="hub"):
+    def write_build_info(self, profile="ubuntu", debug_login="0", serial_console="0", config_public_keys="supplied"):
         (self.files / "keeper-os-1.2.3.build.txt").write_text(
             f"profile={profile}\ndebug_login={debug_login}\nserial_console={serial_console}\n"
             f"config_public_keys={config_public_keys}\n")

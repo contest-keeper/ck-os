@@ -68,9 +68,16 @@ class MintProfileTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
-@unittest.skipUnless(shutil.which("gpg") and shutil.which("dpkg-deb"), "gpg and dpkg-deb are needed")
 class MintKeyringCheckTests(unittest.TestCase):
     """mint_keyring_from_deb is the only thing that keeps a keyring without the pinned key out of the build."""
+
+    def setUp(self):
+        # CK_KEYRING_TEST_REQUIRED=1 (set in CI) turns a missing tool into a failure instead of a skip.
+        missing = [tool for tool in ("gpg", "dpkg-deb") if not shutil.which(tool)]
+        if missing and os.environ.get("CK_KEYRING_TEST_REQUIRED") == "1":
+            self.fail("CK_KEYRING_TEST_REQUIRED is set but these are missing: " + ", ".join(missing))
+        if missing:
+            self.skipTest("skipped: " + ", ".join(missing) + " not found (set CK_KEYRING_TEST_REQUIRED=1 to make this a failure)")
 
     def make_deb(self, work):
         home = work / "gnupg"

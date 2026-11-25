@@ -478,10 +478,10 @@ chmod 0600 "$MNT/boot/grub/grub.cfg"
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
 # What kind of build this is, for tools/publish-image: it refuses to publish a test build (empty root password,
 # serial console, CI test key) and reads the family from here. The settings key list is "test" when it holds the
-# CI test key, "hub" when it holds other keys and "none" when the image has no list.
+# CI test key, "supplied" when it holds other keys (the build cannot know the Hub's keys; the release workflow checks that the list is set and is not the test key) and "none" when the image has no list.
 config_keys="none"
 if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
-  config_keys="hub"
+  config_keys="supplied"
   if grep -qF -f <(grep -vE '^[[:space:]]*(#|$)' "$REPO/tools/ci-test-config-keys") "$CONFIG_PUBLIC_KEYS"; then
     config_keys="test"
   fi

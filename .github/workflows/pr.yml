@@ -22,6 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run image patch regression tests
+        env:
+          CK_KEYRING_TEST_REQUIRED: '1'
         run: python3 -m unittest discover -s tests -v
   rust:
     uses: contest-keeper/.github/.github/workflows/rust-ci.yml@main
