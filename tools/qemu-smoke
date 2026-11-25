@@ -10,7 +10,7 @@
 #              enrolment would do; must boot (shim, then the signed UKI), report "Secure boot enabled" and pass the
 #              verity checks of the verity mode.
 #     refused: Secure Boot without the certificate; must NOT reach the login prompt, because shim refuses the UKI.
-#     tamper:  a copy of the image with the first block of the root partition overwritten, booted like verity mode; must
+#     tamper:  a copy of the image with block 20 of /usr/lib/systemd/systemd in the root partition overwritten, booted like verity mode; must
 #              NOT reach the login prompt, and the log must show the verity or mount failure. Needs sfdisk. Not run: shim with the MOK list (see
 #              docs/protected-image.md); the test enrols the certificate in the firmware's db instead.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
