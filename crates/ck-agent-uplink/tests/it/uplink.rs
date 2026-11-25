@@ -608,6 +608,8 @@ fn refused_files_are_capped_and_the_newest_are_kept() {
     assert_eq!(event.seq, 1);
     let (counter, _) = queue.pending().expect("pending").remove(0);
     queue.set_aside(counter).expect("set aside");
+    // The cap is applied when the queue is read next.
+    queue.pending().expect("pending");
     let refused = fs::read_dir(&folder)
         .expect("read")
         .flatten()

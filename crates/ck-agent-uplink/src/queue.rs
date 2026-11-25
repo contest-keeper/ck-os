@@ -138,7 +138,6 @@ impl Queue {
     /// read is set aside as `.bad` so it does not block the ones after it.
     pub fn pending(&self) -> Result<Vec<(u64, Event)>, Error> {
         let mut found = Vec::new();
-        let mut quarantined = false;
         let entries = fs::read_dir(&self.dir).map_err(|e| queue_error("reading the queue", &e))?;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -157,12 +156,10 @@ impl Queue {
             } else {
                 tracing::warn!("the queued file {name} is not an event; setting it aside");
                 let _ = fs::rename(entry.path(), entry.path().with_extension("bad"));
-                quarantined = true;
             }
         }
-        if quarantined {
-            self.prune_aside();
-        }
+        // Once per read, not once per refusal: a long backlog would scan the folder for each.
+        self.prune_aside();
         found.sort_by_key(|(counter, _)| *counter);
         Ok(found)
     }
@@ -180,9 +177,7 @@ impl Queue {
     pub fn set_aside(&self, counter: u64) -> Result<(), Error> {
         let path = self.dir.join(event_file(counter));
         fs::rename(&path, path.with_extension("refused"))
-            .map_err(|e| queue_error("setting a refused event aside", &e))?;
-        self.prune_aside();
-        Ok(())
+            .map_err(|e| queue_error("setting a refused event aside", &e))
     }
 
     /// Keeps the newest `MAX_ASIDE` files of the kinds that are no longer sent (`.refused`, `.bad`)
