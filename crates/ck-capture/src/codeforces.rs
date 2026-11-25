@@ -5,6 +5,8 @@
 //! hash and a size of the source (the same code on two sticks shows without anyone's code being
 //! kept). No password, cookie, token, e-mail address or source code is ever put in an event.
 
+use std::time::{Duration, Instant};
+
 use ck_crypto::sha256_hex;
 use serde_json::json;
 
@@ -29,10 +31,17 @@ struct Pending {
     source_cut: bool,
 }
 
+/// How long an accepted submission waits for the page that tells its id before it is told without
+/// one. The browser asks for that page at once, so this only matters when it never does.
+const HOLD: Duration = Duration::from_secs(10);
+
 /// An accepted submission that waits for the page of submissions, which tells its id.
 struct Awaiting {
     sent: Pending,
     user: Option<String>,
+    /// Where the site sent the browser (the path), the only page that tells this submission's id.
+    location: Option<String>,
+    since: Instant,
 }
 
 /// Watches Codeforces. With `observe` it also writes what the traffic looks like (see [`Observer`]).
@@ -51,6 +60,16 @@ impl Codeforces {
             user: None,
             pending: Vec::new(),
             awaiting: None,
+        }
+    }
+
+    /// Tells the submission that waited too long for its id, without one.
+    fn flush_stale(&mut self, now: Instant) -> Vec<Output> {
+        match &self.awaiting {
+            Some(waiting) if now.saturating_duration_since(waiting.since) >= HOLD => {
+                self.finish_awaiting(None)
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -114,6 +133,14 @@ fn submission_event(sent: &Pending, user: Option<&str>, accepted: bool, id: Opti
             "submission_id": id,
         }),
     }
+}
+
+/// The path of a `Location` value, which is a path or a whole address; the query is left out.
+fn location_path(location: &str) -> String {
+    let rest = location.split_once("://").map_or(location, |(_, after)| {
+        after.find('/').map_or("", |at| &after[at..])
+    });
+    rest.split(['?', '#']).next().unwrap_or("").to_owned()
 }
 
 fn is_codeforces(head: &Head) -> bool {
@@ -226,6 +253,10 @@ impl Rule for Codeforces {
         outputs
     }
 
+    fn on_idle(&mut self) -> Vec<Output> {
+        self.flush_stale(Instant::now())
+    }
+
     fn on_response(&mut self, request: &Head, response: &Response) -> Vec<Output> {
         let mut outputs = match &mut self.observer {
             Some(observer) => observer.on_response(request, response),
@@ -244,6 +275,8 @@ impl Rule for Codeforces {
                 self.awaiting = Some(Awaiting {
                     sent,
                     user: self.user.clone(),
+                    location: response.head.header("location").map(location_path),
+                    since: Instant::now(),
                 });
             } else {
                 outputs.push(submission_event(&sent, self.user.as_deref(), false, None));
@@ -255,8 +288,12 @@ impl Rule for Codeforces {
             && content_type.to_ascii_lowercase().starts_with("text/html")
             && let Some(waiting) = &self.awaiting
         {
-            // The first page after the redirect tells the id; any other page means it was missed.
-            let id = newest_submission_id(&String::from_utf8_lossy(&response.body), &waiting.sent);
+            // Only the page the site redirected to tells the id; any other page means it was missed.
+            let id = (waiting.location.as_deref() == Some(request.path()))
+                .then(|| {
+                    newest_submission_id(&String::from_utf8_lossy(&response.body), &waiting.sent)
+                })
+                .flatten();
             outputs.extend(self.finish_awaiting(id));
         }
         match page_reader(content_type, &response.body) {
@@ -374,6 +411,18 @@ mod tests {
         (request, head)
     }
 
+    fn redirect(to: &str) -> Response {
+        Response {
+            status: 302,
+            head: parse_response_head(
+                format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\n\r\n").as_bytes(),
+            )
+            .unwrap(),
+            body: Vec::new(),
+            body_truncated: false,
+        }
+    }
+
     fn answer(status: u16) -> Response {
         Response {
             status,
@@ -392,7 +441,13 @@ mod tests {
         let (post, head) = submit("/contest/2285/problem/B", "int main() { return 0; }");
         assert_eq!(rule.on_request(&post), Vec::<Output>::new());
         // The redirect alone tells nothing yet: the page of submissions follows with the id.
-        assert_eq!(events(rule.on_response(&head, &answer(302))), NO_EVENTS);
+        assert_eq!(
+            events(rule.on_response(
+                &head,
+                &redirect("https://codeforces.com/contest/2285/my?x=1")
+            )),
+            NO_EVENTS
+        );
         let (request, list) = my_page(&my_row(245_000_123, "/contest/2285/problem/B"));
         let told = events(rule.on_response(&request, &list));
         assert_eq!(told.len(), 1);
@@ -440,12 +495,46 @@ mod tests {
         let mut rule = Codeforces::new(false);
         let (post, head) = submit("/contest/2285/problem/B", "x");
         let _ = rule.on_request(&post);
-        let _ = rule.on_response(&head, &answer(302));
+        let _ = rule.on_response(&head, &redirect("/contest/2285/my"));
         let (request, list) = my_page(&my_row(9, "/contest/2285/problem/C"));
         let told = events(rule.on_response(&request, &list));
         assert_eq!(told.len(), 1);
         assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
         assert_eq!(told[0]["accepted"], true);
+    }
+
+    #[test]
+    fn a_page_other_than_the_redirect_target_never_gives_an_id() {
+        let mut rule = Codeforces::new(false);
+        let (post, head) = submit("/contest/2285/problem/B", "x");
+        let _ = rule.on_request(&post);
+        let _ = rule.on_response(&head, &redirect("/contest/2285/my"));
+        // Everyone's status page, whose newest row is another person's submission to the same problem.
+        let request =
+            parse_request_head(b"GET https://codeforces.com/contest/2285/status HTTP/1.1\r\n\r\n")
+                .unwrap();
+        let (_, status_page) = my_page(&my_row(77, "/contest/2285/problem/B"));
+        let told = events(rule.on_response(&request, &status_page));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_submission_that_waits_too_long_is_told_without_an_id() {
+        let mut rule = Codeforces::new(false);
+        let (post, head) = submit("/contest/2285/problem/B", "x");
+        let _ = rule.on_request(&post);
+        let _ = rule.on_response(&head, &redirect("/contest/2285/my"));
+        let since = rule.awaiting.as_ref().expect("waiting").since;
+        assert_eq!(events(rule.flush_stale(since + HOLD / 2)), NO_EVENTS);
+        let told = events(rule.flush_stale(since + HOLD));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["submission_id"], serde_json::Value::Null);
+        assert_eq!(
+            events(rule.flush_stale(since + HOLD)),
+            NO_EVENTS,
+            "told once"
+        );
     }
 
     #[test]

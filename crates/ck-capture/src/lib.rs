@@ -61,6 +61,10 @@ pub enum Output {
 pub trait Rule: Send {
     fn on_request(&mut self, request: &Request) -> Vec<Output>;
     fn on_response(&mut self, request: &Head, response: &Response) -> Vec<Output>;
+    /// Called every few seconds, so a rule can tell what it still holds when no traffic comes.
+    fn on_idle(&mut self) -> Vec<Output> {
+        Vec::new()
+    }
 }
 
 /// Where events go. On the stick it is the queue the uplink sends from.
