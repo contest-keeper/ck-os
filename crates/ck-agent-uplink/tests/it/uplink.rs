@@ -621,6 +621,39 @@ fn refused_files_are_capped_and_the_newest_are_kept() {
 }
 
 #[test]
+fn an_event_the_hub_took_stays_on_the_stick_as_it_was_sent_and_old_copies_are_capped() {
+    let hub = fake_hub(vec![200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let folder = dir.path().join("queue");
+    let queue = Queue::open(&folder).expect("open");
+    push(&queue, &uplink, "ana");
+    let (counter, _) = queue.pending().expect("pending").remove(0);
+    let before = fs::read(folder.join(format!("event-{counter:012}.json"))).expect("file");
+
+    let url = uplink.events_url().expect("url");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 1);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+    let copy = folder.join(format!("event-{counter:012}.sent"));
+    assert_eq!(fs::read(&copy).expect("the local copy"), before);
+
+    // Far more copies than the cap: the oldest go, the newest stay.
+    for n in 1_000_000..1_020_001_u64 {
+        fs::write(folder.join(format!("event-{n:012}.sent")), "{}").expect("old copy");
+    }
+    queue.pending().expect("pending");
+    let kept = fs::read_dir(&folder)
+        .expect("read")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "sent"))
+        .count();
+    assert_eq!(kept, 20_000);
+    assert!(!copy.exists());
+    assert!(folder.join("event-000001020000.sent").exists());
+}
+
+#[test]
 fn the_recorder_state_follows_the_mode_and_the_service() {
     let dir = tempfile::tempdir().expect("dir");
     let root = dir.path();

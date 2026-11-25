@@ -206,7 +206,7 @@ impl Uplink {
         (&self.config.stick_id, &self.boot_id)
     }
 
-    /// Sends the waiting events in order, taking each out of the queue once the Hub has it, and
+    /// Sends the waiting events in order, keeping each as a `.sent` copy once the Hub has it, and
     /// stops at the first one that does not get through so the order is kept. Returns how many
     /// were sent.
     ///
@@ -228,7 +228,7 @@ impl Uplink {
             }
             match self.post(url, &event.canonical_bytes()) {
                 Ok(_) | Err(Error::Rejected(409)) => {
-                    queue.remove(counter)?;
+                    queue.archive(counter)?;
                     sent += 1;
                 }
                 // The Hub will never take this one; keeping it would block every later event.

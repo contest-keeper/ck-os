@@ -23,6 +23,9 @@ pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
 
 /// Events set aside as refused or unreadable that are kept for a look; older ones are deleted.
 const MAX_ASIDE: usize = 200;
+/// Events the Hub has taken, kept as `.sent` on the stick: the local copy of what was reported, to
+/// check the Hub's copy against. Events are at most 16 KiB, so this is at most about 320 MB.
+const MAX_SENT: usize = 20_000;
 
 const STATE_FILE: &str = "state.json";
 /// Held while an event is added. Capture, the uplink and the `enqueue` command each run in their own
@@ -164,12 +167,14 @@ impl Queue {
         Ok(found)
     }
 
-    /// Takes a sent event out of the queue. One that is already gone is fine.
-    pub fn remove(&self, counter: u64) -> Result<(), Error> {
-        match fs::remove_file(self.dir.join(event_file(counter))) {
+    /// Takes a sent event out of the sending order but keeps it as `.sent`, the stick's own copy.
+    /// One that is already gone is fine.
+    pub fn archive(&self, counter: u64) -> Result<(), Error> {
+        let path = self.dir.join(event_file(counter));
+        match fs::rename(&path, path.with_extension("sent")) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(queue_error("removing a sent event", &e)),
+            Err(e) => Err(queue_error("keeping a sent event", &e)),
         }
     }
 
@@ -181,23 +186,27 @@ impl Queue {
     }
 
     /// Keeps the newest `MAX_ASIDE` files of the kinds that are no longer sent (`.refused`, `.bad`)
-    /// so they cannot fill the disk. Files are named by counter, so the name order is the age.
+    /// and the newest `MAX_SENT` of the sent copies (`.sent`), so they cannot fill the disk. Files
+    /// are named by counter, so the name order is the age.
     fn prune_aside(&self) {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
-        let mut aside: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext == "refused" || ext == "bad")
-            })
-            .collect();
-        aside.sort();
-        let surplus = aside.len().saturating_sub(MAX_ASIDE);
-        for path in aside.into_iter().take(surplus) {
-            let _ = fs::remove_file(path);
+        let mut aside: Vec<PathBuf> = Vec::new();
+        let mut sent: Vec<PathBuf> = Vec::new();
+        for path in entries.flatten().map(|entry| entry.path()) {
+            match path.extension().and_then(|ext| ext.to_str()) {
+                Some("refused" | "bad") => aside.push(path),
+                Some("sent") => sent.push(path),
+                _ => {}
+            }
+        }
+        for (mut files, keep) in [(aside, MAX_ASIDE), (sent, MAX_SENT)] {
+            files.sort();
+            let surplus = files.len().saturating_sub(keep);
+            for path in files.into_iter().take(surplus) {
+                let _ = fs::remove_file(path);
+            }
         }
     }
 
