@@ -12,8 +12,8 @@ mod trust;
 mod usb_storage;
 
 pub use apply::{
-    BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics, bluetooth_unblock_pending,
-    finish_bluetooth_unblock,
+    BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics, bluetooth_unblock_needed,
+    bluetooth_unblock_pending, finish_bluetooth_unblock,
 };
 pub use branding::apply_branding;
 pub use enrolment::{PendingEnrolment, read_applied_config};

@@ -384,7 +384,9 @@ fn a_site_list_taken_out_of_the_settings_goes_back_to_the_images_list() {
 
 #[test]
 fn bluetooth_taken_out_of_the_settings_stays_pending_until_it_is_switched_on() {
-    use ck_agent_config::{bluetooth_unblock_pending, finish_bluetooth_unblock};
+    use ck_agent_config::{
+        bluetooth_unblock_needed, bluetooth_unblock_pending, finish_bluetooth_unblock,
+    };
 
     let blocked = SETTINGS.replace(
         r#""site": "Lab 1","#,
@@ -393,6 +395,10 @@ fn bluetooth_taken_out_of_the_settings_stays_pending_until_it_is_switched_on() {
     let (dir, root) = stick(&blocked);
     apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
     assert!(!bluetooth_unblock_pending(&root));
+    assert!(
+        !bluetooth_unblock_needed(&root)
+            || fs::read_to_string(dir.path().join("etc/ck/block-bluetooth")).is_ok()
+    );
 
     fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
     apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
@@ -403,4 +409,23 @@ fn bluetooth_taken_out_of_the_settings_stays_pending_until_it_is_switched_on() {
 
     finish_bluetooth_unblock(&root).expect("done");
     assert!(!bluetooth_unblock_pending(&root));
+}
+
+#[test]
+fn bluetooth_is_still_switched_on_when_the_file_writes_stopped_before_the_marker() {
+    use ck_agent_config::bluetooth_unblock_needed;
+
+    let blocked = SETTINGS.replace(
+        r#""site": "Lab 1","#,
+        r#""site": "Lab 1", "block_bluetooth": true,"#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+
+    // The next settings no longer block it, but a file in the way stops apply_basics at the team file.
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
+    fs::remove_file(dir.path().join("etc/ck/team")).expect("the team file");
+    fs::create_dir_all(dir.path().join("etc/ck/team")).expect("block the team file");
+    assert!(apply_basics(&root, &load(&root).expect("valid settings")).is_err());
+    assert!(bluetooth_unblock_needed(&root));
 }

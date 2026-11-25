@@ -29,6 +29,13 @@ pub fn bluetooth_unblock_pending(root: &Root) -> bool {
     root.path(UNBLOCK_BLUETOOTH_PENDING).exists()
 }
 
+/// Whether Bluetooth has to be switched on again at this boot: a note is pending, or an earlier boot's block
+/// marker is still there because this boot's file writes stopped before they reached it.
+#[must_use]
+pub fn bluetooth_unblock_needed(root: &Root) -> bool {
+    bluetooth_unblock_pending(root) || root.path(BLOCK_BLUETOOTH).exists()
+}
+
 /// Says that Bluetooth was switched on again, so the next boot does not try it once more.
 pub fn finish_bluetooth_unblock(root: &Root) -> Result<(), Error> {
     remove(root, UNBLOCK_BLUETOOTH_PENDING)

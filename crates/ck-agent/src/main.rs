@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{
-    Error, Root, Trust, apply_basics, apply_branding, bluetooth_unblock_pending,
+    Error, Root, Trust, apply_basics, apply_branding, bluetooth_unblock_needed,
     finish_bluetooth_unblock, load_for_boot, write_trust,
 };
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
@@ -178,7 +178,7 @@ fn apply_config(root: &Root) -> ExitCode {
         set_running_hostname(&loaded.config.computer_name());
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
-        } else if bluetooth_unblock_pending(root) {
+        } else if bluetooth_unblock_needed(root) {
             if unblock_bluetooth() {
                 if let Err(error) = finish_bluetooth_unblock(root) {
                     tracing::error!("cannot note that Bluetooth is on again: {error}");
