@@ -82,7 +82,11 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
     fs::create_dir_all(&cli.out).map_err(|e| format!("creating {}: {e}", cli.out.display()))?;
     // Results of an earlier run must not pass for this one.
     for stale in ["report.json", "screenshot.png", "serial.log", "qemu.err"] {
-        let _ = fs::remove_file(cli.out.join(stale));
+        match fs::remove_file(cli.out.join(stale)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("removing the old {stale}: {e}")),
+        }
     }
     let work = tempfile::TempDir::new().map_err(|e| format!("creating a work folder: {e}"))?;
 

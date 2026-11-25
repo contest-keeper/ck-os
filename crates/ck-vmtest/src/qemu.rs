@@ -115,7 +115,7 @@ impl Machine {
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
             .arg("-serial")
-            .arg(format!("file:{}", escaped(&serial_log)))
+            .arg(format!("file:{}", serial_log.display()))
             .stdout(Stdio::null())
             .stderr(File::create(&error_log).map_err(io("creating qemu.err"))?)
             .spawn()
