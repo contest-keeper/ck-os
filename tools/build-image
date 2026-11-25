@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Keeper OS disk image from stock Ubuntu 24.04 (see docs/base-images.md).
-# Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE]
+# Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3
+# (and gpg and dpkg-deb for --profile mint).
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -52,9 +53,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;; # the image then only accepts stick settings the Hub signed with one of these keys
     --profile)
-      PROFILE=${2:?--profile requires ubuntu or debian}
+      PROFILE=${2:?--profile requires ubuntu, debian or mint}
       case $PROFILE in
-        ubuntu | debian) ;;
+        ubuntu | debian | mint) ;;
         *)
           echo "unknown image profile: $PROFILE" >&2
           exit 2
@@ -91,6 +92,8 @@ APT_SOURCES=(
 )
 SOURCE_OFFER=$REPO/image/SOURCE-OFFER.txt.in
 UBUNTU_RELEASE_FIELD=UBUNTU_CODENAME=noble
+# The Ubuntu trademarked packages are removed on every profile that installs them (everything but Debian).
+PURGE_UBUNTU_BRANDING=1
 if [[ $PROFILE == debian ]]; then
   # shellcheck source=../image/profiles/debian/profile.sh
   # shellcheck source-path=SCRIPTDIR
@@ -99,6 +102,14 @@ if [[ $PROFILE == debian ]]; then
   VERSION=$VERSION-debian
   SOURCE_OFFER=$REPO/image/profiles/debian/SOURCE-OFFER.txt.in
   UBUNTU_RELEASE_FIELD=
+  PURGE_UBUNTU_BRANDING=0
+elif [[ $PROFILE == mint ]]; then
+  # shellcheck source=../image/profiles/mint/profile.sh
+  # shellcheck source-path=SCRIPTDIR
+  source "$REPO/image/profiles/mint/profile.sh"
+  configure_mint_profile
+  VERSION=$VERSION-mint
+  SOURCE_OFFER=$REPO/image/profiles/mint/SOURCE-OFFER.txt.in
 fi
 # Every timestamp in the image is clamped to the snapshot time unless the caller sets it.
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
@@ -196,6 +207,13 @@ fetch_pinned "$FIREFOX_URL" "$FIREFOX_SHA256" firefox.deb
 fetch_pinned "$CODIUM_URL" "$CODIUM_SHA256" codium.deb
 fetch_pinned "$CLANGD_VSIX_URL" "$CLANGD_VSIX_SHA256" clangd.vsix
 fetch_pinned "$KOTLIN_URL" "$KOTLIN_SHA256" kotlin.zip
+PROFILE_HOOKS=()
+if [[ $PROFILE == mint ]]; then
+  # The Mint repository is checked, used and taken out again inside the build (see image/profiles/mint/profile.sh).
+  fetch_pinned "$MINT_KEYRING_URL" "$MINT_KEYRING_SHA256" mint-keyring.deb
+  mint_keyring_from_deb "$WORK/mint-keyring.deb" "$WORK/linuxmint-keyring.gpg"
+  PROFILE_HOOKS=(--customize-hook="sh $REPO/image/profiles/mint/hook.sh \"\$1\" $WORK/linuxmint-keyring.gpg $MINT_MIRROR $MINT_SUITE '$MINT_COMPONENTS' '$MINT_PACKAGES'")
+fi
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
@@ -209,6 +227,7 @@ mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' 
   --customize-hook='for t in kotlinc kotlin kotlinc-jvm; do ln -sfn /opt/kotlinc/bin/$t "$1"/usr/local/bin/$t; done' \
   --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
   --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
+  "${PROFILE_HOOKS[@]}" \
   "$SUITE" "$MNT" "${APT_SOURCES[@]}"
 
 echo "== install the Keeper files"
@@ -386,7 +405,7 @@ echo "== remove Ubuntu branding, add the source offer"
 # on removed artwork; nothing installs packages on a contest stick afterwards.
 BRANDING_PACKAGES=(xubuntu-core xubuntu-desktop-minimal xubuntu-artwork xubuntu-wallpapers ubuntu-mono
   plymouth-theme-ubuntu-text plymouth-theme-xubuntu-logo plymouth-theme-xubuntu-text)
-if [[ $PROFILE == ubuntu ]]; then
+if [[ $PURGE_UBUNTU_BRANDING -eq 1 ]]; then
   chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
 fi
 # Desktop lockdown (threat 1): no terminal program except xterm, which Code::Blocks and Geany start to run a
@@ -448,6 +467,18 @@ sed -i '/^menuentry .*--unrestricted/!s/^menuentry /menuentry --unrestricted /' 
 chmod 0600 "$MNT/boot/grub/grub.cfg"
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
+# What kind of build this is, for tools/publish-image: it refuses to publish a test build (empty root password,
+# serial console, CI test key) and reads the family from here. The settings key list is "test" when it holds the
+# CI test key, "hub" when it holds other keys and "none" when the image has no list.
+config_keys="none"
+if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
+  config_keys="hub"
+  if grep -qF -f <(grep -vE '^[[:space:]]*(#|$)' "$REPO/tools/ci-test-config-keys") "$CONFIG_PUBLIC_KEYS"; then
+    config_keys="test"
+  fi
+fi
+printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\n' \
+  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" >"$OUT/keeper-os-$VERSION.build.txt"
 
 # The name resolver stub at 127.0.0.53 answers anyone, so the network lock does not let it out; resolv.conf
 # names the router's servers directly and Squid asks them itself (see netlock.nft).
