@@ -110,6 +110,16 @@ fn the_settings_file_is_never_copied_out_as_the_wallpaper() {
 }
 
 #[test]
+fn an_alias_of_the_settings_file_is_not_a_picture() {
+    // FAT short names reach the settings file under another name.
+    let (dir, root) = stick(&settings(r#"{"wallpaper": "CONFIG~1.JSO"}"#));
+    let json = fs::read(dir.path().join("ck-config/config.json")).expect("settings");
+    fs::write(dir.path().join("ck-config/CONFIG~1.JSO"), json).expect("alias");
+    apply(&root).expect("apply");
+    assert!(!dir.path().join("etc/ck/team-wallpaper.png").exists());
+}
+
+#[test]
 fn a_missing_wallpaper_file_does_not_stop_the_other_settings() {
     let (dir, root) = stick(&settings(r#"{"wallpaper": "gone.png"}"#));
     fs::create_dir_all(dir.path().join("etc/ck")).expect("folder");

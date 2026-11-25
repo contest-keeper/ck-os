@@ -115,7 +115,19 @@ fn apply_wallpaper(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     }
     let picture =
         fs::read(&source).map_err(|e| Error::io(format!("reading the wallpaper {name}"), e))?;
+    // The name check above misses aliases of the settings file (FAT short names such as
+    // `CONFIG~1.JSO`), so what is copied must also look like a picture: the settings file is text.
+    if !looks_like_picture(&picture) {
+        tracing::warn!("the wallpaper {name} is not a picture; keeping the current wallpaper");
+        return Ok(());
+    }
     write(root, TEAM_WALLPAPER, &picture, 0o644)
+}
+
+/// The first bytes of the picture formats a desktop shows as a wallpaper.
+fn looks_like_picture(bytes: &[u8]) -> bool {
+    const MAGIC: [&[u8]; 5] = [b"\x89PNG", b"\xFF\xD8\xFF", b"GIF8", b"BM", b"RIFF"];
+    MAGIC.iter().any(|magic| bytes.starts_with(magic))
 }
 
 /// Sets the bookmarks and the home page. Everything else in the image's policies, such as the proxy
