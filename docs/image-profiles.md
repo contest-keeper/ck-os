@@ -38,7 +38,7 @@ settled by the code:
 
 - The base is the Ubuntu 24.04 snapshot, as in the default profile, because Mint 22 is Ubuntu 24.04. The same
   Ubuntu branding removal and the same checks apply. The image says Keeper OS and carries no Mint name, logo or artwork.
-- The Mint repository (`http://packages.linuxmint.com`, suite `wilma`) is wired in during the build only. Its keyring
+- The Mint repository (`http://ftp.fau.de/mint/packages`, a public mirror of packages.linuxmint.com, which refuses GitHub-hosted runners, suite `wilma`) is wired in during the build only. Its keyring
   is the `linuxmint-keyring` package, pinned by SHA-256, and the build refuses a keyring that does not hold the key
   that signs the `wilma` Release file (fingerprint `302F0738F465C1535761F965A6616109451BBBF2`, read from
   `Release.gpg` on 2026-11-25; an owner should confirm it out of band). `apt-get update` against the repository must

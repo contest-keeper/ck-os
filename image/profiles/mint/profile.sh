@@ -14,7 +14,9 @@
 # that decision needs. The Mint repository has no snapshots, so a build that installs from it is not reproducible.
 
 configure_mint_profile() {
-  MINT_MIRROR=${CK_MINT_MIRROR:-http://packages.linuxmint.com}
+  # A public mirror of packages.linuxmint.com (which refuses GitHub-hosted runners with HTTP 403). Everything is checked
+  # against the pinned key, so the mirror is not trusted: a changed file fails the signature or the keyring hash.
+  MINT_MIRROR=${CK_MINT_MIRROR:-http://ftp.fau.de/mint/packages}
   MINT_SUITE=wilma
   MINT_COMPONENTS="main upstream"
   MINT_PACKAGES=${CK_MINT_PACKAGES:-}
