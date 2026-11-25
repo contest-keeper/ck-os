@@ -28,17 +28,11 @@ const GENERATED: &str = "# Written at boot by ck-agent from the admin tool setti
 ///
 /// Each file is replaced on its own, so a crash part-way leaves a mix of old and new files. That is
 /// fine because the agent runs this at every boot and every step overwrites its file: the next
-/// run brings all of them in line.
+/// run brings all of them in line. The copy of the settings and its hash come last, so a failure
+/// part-way never reports settings as applied that are not.
 pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let settings = &loaded.config.settings;
 
-    write(root, CONFIG_COPY, &loaded.raw, 0o600)?;
-    write(
-        root,
-        CONFIG_HASH,
-        format!("{}\n", loaded.sha256).as_bytes(),
-        0o644,
-    )?;
     write(
         root,
         TEAM,
@@ -94,6 +88,16 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     } else {
         tracing::warn!("no allowed sites in the settings; keeping the image's list");
     }
+
+    // Last: the copy and its hash say "these settings are applied" (the self-test compares the hash, and a
+    // refused file falls back to the copy), so they must not move ahead of the files they describe.
+    write(root, CONFIG_COPY, &loaded.raw, 0o600)?;
+    write(
+        root,
+        CONFIG_HASH,
+        format!("{}\n", loaded.sha256).as_bytes(),
+        0o644,
+    )?;
     Ok(())
 }
 
