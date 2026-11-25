@@ -23,6 +23,8 @@ const CHUNKS_PER_PASS: usize = 8;
 const FILES_PER_PASS: usize = 8;
 const BYTES_PER_SECOND: u64 = 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(12);
+/// A chunk is up to 4 MiB; a slow venue link needs longer than the small requests do.
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecordingError {
@@ -94,8 +96,15 @@ impl Uplink {
             if sent == FILES_PER_PASS || chunks == 0 {
                 break;
             }
-            let mut file = File::open(&path)?;
-            let size = file.metadata()?.len();
+            // A file that cannot be read must not stop the ones after it.
+            let opened = File::open(&path).and_then(|file| Ok((file.metadata()?.len(), file)));
+            let (size, mut file) = match opened {
+                Ok(found) => found,
+                Err(error) => {
+                    tracing::warn!("a recording cannot be read, skipping it: {error}");
+                    continue;
+                }
+            };
             if size == 0 || size > FILE_LIMIT {
                 continue;
             }
@@ -106,7 +115,13 @@ impl Uplink {
             let Some(kind) = recording_kind(&path) else {
                 continue;
             };
-            let sha256 = file_hash(&mut file, size)?;
+            let sha256 = match file_hash(&mut file, size) {
+                Ok(sha256) => sha256,
+                Err(error) => {
+                    tracing::warn!("a recording cannot be hashed, skipping it: {error}");
+                    continue;
+                }
+            };
             let start = Start {
                 file: name,
                 kind,
@@ -355,6 +370,16 @@ impl<'a> RecordingHub<'a> {
             builder = builder.header("content-type", "application/json");
         }
         let request = builder.body(body).map_err(|_| RecordingError::Connection)?;
+        let timeout = if chunk.is_some() {
+            CHUNK_TIMEOUT
+        } else {
+            TIMEOUT
+        };
+        let request = self
+            .agent
+            .configure_request(request)
+            .timeout_global(Some(timeout))
+            .build();
         let mut response = self.agent.run(request).map_err(|error| match error {
             ureq::Error::StatusCode(status) => RecordingError::Rejected(status),
             _ => RecordingError::Connection,
