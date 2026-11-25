@@ -3,7 +3,8 @@ name: Keeper OS image
 on:
   push:
     branches: [develop]
-    paths: ['.github/workflows/keeper-image.yml']
+    # Every deploy of develop publishes new images; a change to docs alone does not need one.
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_call:
     inputs:
       tag:
@@ -20,20 +21,28 @@ defaults:
   run:
     shell: bash
 
+# One run at a time: all jobs update the same image index, which a second writer must not overwrite.
+concurrency:
+  group: keeper-os-image-${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
+  cancel-in-progress: false
+
 jobs:
   image:
+    name: image (${{ matrix.profile }})
     if: >-
       (github.ref == 'refs/heads/develop' &&
         (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.tag != '')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        profile: [ubuntu, debian, mint]
     # Configure the existing environment approval and a separate blob-scoped OIDC publisher for
     # each target. Enable CK_IMAGE_PUBLISH_ENABLED in that environment once it is ready.
     environment: ${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
-    concurrency:
-      group: keeper-os-image-${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
-      cancel-in-progress: false
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
@@ -50,6 +59,8 @@ jobs:
             version="$version-dev.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
             printf '%s\n' "$version" > version.txt
           fi
+          # build-image names the files and the image after the profile, except for the default (ubuntu).
+          [[ "${{ matrix.profile }}" == ubuntu ]] || version="$version-${{ matrix.profile }}"
           echo "KEEPER_IMAGE_VERSION=$version" >> "$GITHUB_ENV"
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
@@ -83,7 +94,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/keeper-image"
           sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console
+            --config-public-keys tools/ci-test-config-keys --serial-console --profile "${{ matrix.profile }}"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
       # The smoke build above carries a CI test key, so it can never be published. A build that is
@@ -104,7 +115,7 @@ jobs:
           fi
           sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys "$RUNNER_TEMP/config-public-keys"
+            --config-public-keys "$RUNNER_TEMP/config-public-keys" --profile "${{ matrix.profile }}"
       - name: Verify the packaged files and stage the Hub manifest
         run: |
           python3 tools/publish-image "$RUNNER_TEMP/keeper-image" "$KEEPER_IMAGE_VERSION" \
