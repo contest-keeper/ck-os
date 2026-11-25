@@ -129,7 +129,7 @@ fn split_part(part: &[u8]) -> Option<(String, &[u8])> {
 /// The `name` parameter of a `Content-Disposition` line, in any letter case and with or without
 /// quotes or spaces around the `=`. `filename` is a different parameter.
 fn disposition_name(line: &str) -> Option<String> {
-    for parameter in line.split(';').skip(1) {
+    for parameter in split_unquoted(line).into_iter().skip(1) {
         let Some((key, value)) = parameter.split_once('=') else {
             continue;
         };
@@ -138,6 +138,27 @@ fn disposition_name(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Splits at semicolons that are not inside a quoted string, so a file name such as
+/// `"x; name=action"` stays one parameter. A backslash escapes the next character in quotes.
+fn split_unquoted(line: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (at, c) in line.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if quoted && c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if c == ';' && !quoted {
+            parts.push(&line[start..at]);
+            start = at + 1;
+        }
+    }
+    parts.push(&line[start..]);
+    parts
 }
 
 #[cfg(test)]
@@ -177,6 +198,13 @@ mod tests {
     fn other_content_types_and_a_missing_boundary_give_nothing() {
         assert_eq!(pick("application/json", b"{}", &["a"]), Vec::new());
         assert_eq!(pick("multipart/form-data", b"--b\r\n", &["a"]), Vec::new());
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_file_name_does_not_make_a_parameter() {
+        let line =
+            r#"Content-Disposition: form-data; filename="x; name=action"; name="sourceFile""#;
+        assert_eq!(disposition_name(line).as_deref(), Some("sourceFile"));
     }
 
     #[test]
