@@ -72,7 +72,7 @@ fn the_stick_keeps_its_own_interface_and_every_other_storage_interface_is_switch
         lines[0].contains(r#"KERNEL=="1-2:*", GOTO="ck_usb_storage_end""#),
         "{rules}"
     );
-    assert!(lines[0].contains(r#"ATTR{bInterfaceClass}=="08""#));
+    assert!(lines[0].contains(r#"ATTR{bInterfaceClass}=="06|08""#));
     assert!(lines[1].contains(r#"ATTR{authorized}="0""#), "{rules}");
     assert!(!lines[1].contains("GOTO"));
     assert_eq!(lines[2], r#"LABEL="ck_usb_storage_end""#);
