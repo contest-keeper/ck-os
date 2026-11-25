@@ -726,7 +726,8 @@ if [[ $VERITY -eq 1 ]]; then
       echo "ERROR: $stub is missing, so the root hash has nowhere to go" >&2
       exit 1
     }
-    { printf 'set ck_roothash=%s\n' "$root_hash"; cat "$stub"; } >"$stub.new"
+    # Only an exported variable reaches the grub.cfg that the stub loads with configfile.
+    { printf 'set ck_roothash=%s\nexport ck_roothash\n' "$root_hash"; cat "$stub"; } >"$stub.new"
     mv "$stub.new" "$stub"
   done
   if [[ -n $UKI_KEY ]]; then
