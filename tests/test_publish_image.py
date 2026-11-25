@@ -49,8 +49,11 @@ elif action == "upload":
     state_path.write_text(json.dumps(state))
     if name == os.environ.get("CK_TEST_FAIL_BLOB"):
         sys.exit("simulated upload failure")
-    if name == os.environ.get("CK_TEST_CHANGE_ETAG"):
-        blob["properties"]["etag"] = "concurrent-etag"
+    # Another writer replaces the index just before this upload: once, or on every attempt.
+    if name == os.environ.get("CK_TEST_CHANGE_ETAG") and (
+            not state.get("changed") or os.environ.get("CK_TEST_CHANGE_ETAG_EVERY")):
+        state["changed"] = True
+        blob["properties"]["etag"] = "concurrent-etag-" + str(len(state["calls"]))
         state_path.write_text(json.dumps(state))
     if "--if-none-match" in args:
         assert flag("--if-none-match") == "*" and blob is None
@@ -103,7 +106,7 @@ class ImagePublishTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, PUBLISH, self.files, "1.2.3", *args],
             env=dict(os.environ, PATH=f"{self.directory}:{os.environ['PATH']}",
-                     CK_TEST_STATE=str(self.state), **env),
+                     CK_TEST_STATE=str(self.state), CK_PUBLISH_RETRY_SECONDS="0", **env),
             text=True, capture_output=True,
         )
 
@@ -175,16 +178,28 @@ class ImagePublishTests(unittest.TestCase):
         self.assertIn("checksum", run.stderr)
         self.assertEqual(self.storage()["calls"], [])
 
-    def test_a_stale_manifest_writer_cannot_replace_the_existing_index(self):
+    def stored_index(self):
         old_data = json.dumps({"images": [{"id": "keeper-os-1.2.2"}]}).encode().hex()
         self.state.write_text(json.dumps({"calls": [], "blobs": {INDEX: {
             "data": old_data, "properties": {"etag": "previous-etag"},
         }}}))
-        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX)
+        return old_data
+
+    def test_a_stale_manifest_writer_cannot_replace_the_existing_index(self):
+        old_data = self.stored_index()
+        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX, CK_TEST_CHANGE_ETAG_EVERY="1")
         self.assertNotEqual(run.returncode, 0)
         index = self.storage()["blobs"][INDEX]
         self.assertEqual(index["data"], old_data)
-        self.assertEqual(index["properties"]["etag"], "concurrent-etag")
+        self.assertTrue(index["properties"]["etag"].startswith("concurrent-etag"))
+
+    def test_a_writer_that_lost_the_index_race_reads_it_again_and_publishes_on_top(self):
+        self.stored_index()
+        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        ids = [image["id"] for image in json.loads(bytes.fromhex(self.storage()["blobs"][INDEX]["data"]))["images"]]
+        self.assertEqual(ids, ["keeper-os-1.2.2", "keeper-os-1.2.3"])
+        self.assertEqual(sum(c[:2] == ["upload", f"images/{NAME}"] for c in self.storage()["calls"]), 1)
 
     def test_retry_after_interrupted_upload_publishes_only_a_complete_release(self):
         failed = self.run_publish("--account", "cktest",
