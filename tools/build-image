@@ -2,7 +2,7 @@
 # Builds the Keeper OS disk image from stock Ubuntu 24.04 (see docs/base-images.md).
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3
 # (and gpg and dpkg-deb for --profile mint).
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint] [--read-only-root] [--verity]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint] [--read-only-root] [--verity [--uki-key KEY --uki-cert CERT]]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -33,6 +33,8 @@ DEBUG_LOGIN=0
 SERIAL_CONSOLE=0
 READ_ONLY_ROOT=0
 VERITY=0
+UKI_KEY=
+UKI_CERT=
 COMPRESS=1
 CONFIG_PUBLIC_KEYS=""
 
@@ -83,6 +85,14 @@ while [[ $# -gt 0 ]]; do
       READ_ONLY_ROOT=1
       shift
       ;; # --read-only-root, and the root is opened through dm-verity with a root hash from the kernel command line (UEFI only)
+    --uki-key)
+      UKI_KEY=${2:?--uki-key requires the private key file}
+      shift 2
+      ;; # the key that signs the unified kernel image; it stays on the build machine and never goes into the image
+    --uki-cert)
+      UKI_CERT=${2:?--uki-cert requires the certificate file}
+      shift 2
+      ;;
     --serial-console)
       SERIAL_CONSOLE=1
       shift
@@ -170,6 +180,19 @@ EXTRA_PACKAGES=
 if [[ $EUID -ne 0 ]]; then
   echo "run as root" >&2
   exit 1
+fi
+if [[ -n $UKI_KEY || -n $UKI_CERT ]]; then
+  # A signed boot image only means something around a verity root: it pins the root hash on the command line.
+  if [[ $VERITY -ne 1 || -z $UKI_KEY || -z $UKI_CERT || ! -r $UKI_KEY || ! -r $UKI_CERT ]]; then
+    echo "ERROR: --uki-key and --uki-cert (both readable files) go together with --verity" >&2
+    exit 2
+  fi
+  for tool in ukify sbsign sbverify; do
+    command -v "$tool" >/dev/null || {
+      echo "ERROR: $tool is needed to sign the boot image (packages systemd-ukify, python3-pefile, sbsigntool, systemd-boot-efi)" >&2
+      exit 1
+    }
+  done
 fi
 
 WORK=$(mktemp -d)
@@ -568,8 +591,8 @@ if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
     config_keys="test"
   fi
 fi
-printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\nread_only_root=%s\nverity=%s\n' \
-  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" "$READ_ONLY_ROOT" "$VERITY" >"$OUT/keeper-os-$VERSION.build.txt"
+printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\nread_only_root=%s\nverity=%s\nsigned_uki=%s\n' \
+  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" "$READ_ONLY_ROOT" "$VERITY" "$([[ -n $UKI_KEY ]] && echo 1 || echo 0)" >"$OUT/keeper-os-$VERSION.build.txt"
 
 # The name resolver stub at 127.0.0.53 answers anyone, so the network lock does not let it out; resolv.conf
 # names the router's servers directly and Squid asks them itself (see netlock.nft).
@@ -628,6 +651,20 @@ fi
 
 echo "== make the root filesystem reproducible"
 for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m"; done
+if [[ -n $UKI_KEY ]]; then
+  # The kernel, the initramfs and the os-release text are final now. They are copied out for the signed boot image.
+  mkdir -p "$WORK/uki"
+  uki_kernel=$(find "$MNT/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+  uki_uname=${uki_kernel##*/vmlinuz-}
+  uki_initrd="$MNT/boot/initrd.img-$uki_uname"
+  [[ -f $uki_kernel && -f $uki_initrd ]] || {
+    echo "ERROR: no kernel and initramfs pair in /boot for the signed boot image" >&2
+    exit 1
+  }
+  cp "$uki_kernel" "$WORK/uki/vmlinuz"
+  cp "$uki_initrd" "$WORK/uki/initrd.img"
+  cp "$MNT/usr/lib/os-release" "$WORK/uki/os-release"
+fi
 if [[ $READ_ONLY_ROOT -eq 1 ]]; then
   # /var and /home move to the state partition: the bind mounts in fstab show them from there, and what stays in the
   # read-only root under the same names is never seen.
@@ -677,6 +714,20 @@ if [[ $VERITY -eq 1 ]]; then
     { printf 'set ck_roothash=%s\n' "$root_hash"; cat "$stub"; } >"$stub.new"
     mv "$stub.new" "$stub"
   done
+  if [[ -n $UKI_KEY ]]; then
+    # Kernel, initramfs and the whole command line (with the root hash) in one file signed with our key. Shim starts
+    # grubx64.efi after BOOTX64.EFI, so the signed image takes the place of GRUB and the firmware's db or the
+    # laptop's MOK list (the organizer enrols the certificate once) decides whether it may run.
+    uki_cmdline="root=/dev/mapper/ckroot ro ck.overlay=1 ck.verity=1 ck.roothash=$root_hash lockdown=integrity"
+    [[ $SERIAL_CONSOLE -eq 1 ]] && uki_cmdline="$uki_cmdline console=tty0 console=ttyS0,115200"
+    ukify build --linux="$WORK/uki/vmlinuz" --initrd="$WORK/uki/initrd.img" --cmdline="$uki_cmdline" \
+      --os-release="@$WORK/uki/os-release" --uname="$uki_uname" \
+      --secureboot-private-key="$UKI_KEY" --secureboot-certificate="$UKI_CERT" --output="$WORK/uki/ck.efi"
+    sbverify --cert "$UKI_CERT" "$WORK/uki/ck.efi"
+    install -m 0644 "$WORK/uki/ck.efi" "$ESP_MNT/EFI/BOOT/grubx64.efi"
+    # The public certificate, for the organizer's MOK enrolment (docs/protected-image.md).
+    openssl x509 -in "$UKI_CERT" -outform DER -out "$OUT/keeper-os-$VERSION.uki-cert.der"
+  fi
   umount "$ESP_MNT"
   rmdir "$ESP_MNT"
   printf '%s\n' "$root_hash" >"$OUT/keeper-os-$VERSION.roothash"
