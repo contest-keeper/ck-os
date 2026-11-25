@@ -187,10 +187,7 @@ impl Uplink {
         if answer.iter().all(u8::is_ascii_whitespace) {
             return Ok(HeartbeatReply::default());
         }
-        Ok(serde_json::from_slice(&answer).unwrap_or_else(|error| {
-            tracing::warn!("the Hub's answer to the heartbeat is not a reply: {error}");
-            HeartbeatReply::default()
-        }))
+        Ok(parse_reply(&answer))
     }
 
     /// The address events go to, or `None` when the admin set no server.
@@ -279,6 +276,34 @@ impl Uplink {
             Err(other) => Err(Error::Unreachable(other.to_string())),
         }
     }
+}
+
+/// The commands of a heartbeat answer. A command this agent cannot read (an action it does not know,
+/// from a newer Hub) is skipped on its own: one such command must not drop the lock or message that
+/// comes with it in the same answer.
+fn parse_reply(answer: &[u8]) -> HeartbeatReply {
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        #[serde(default)]
+        commands: Vec<serde_json::Value>,
+    }
+    let raw: Raw = match serde_json::from_slice(answer) {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!("the Hub's answer to the heartbeat is not a reply: {error}");
+            return HeartbeatReply::default();
+        }
+    };
+    let commands = raw
+        .commands
+        .into_iter()
+        .filter_map(|value| {
+            serde_json::from_value(value)
+                .inspect_err(|error| tracing::warn!("a command of the Hub is skipped: {error}"))
+                .ok()
+        })
+        .collect();
+    HeartbeatReply { commands }
 }
 
 /// Where `ck-recorder` writes what it is doing: `waiting`, `recording` or `lowdisk`.
