@@ -263,3 +263,27 @@ fn bookmarks_and_home_page_taken_out_of_the_settings_go_back_to_the_images() {
         serde_json::from_str::<Value>(IMAGE_POLICIES).expect("image")
     );
 }
+
+#[test]
+fn damaged_firefox_policies_are_not_kept_as_the_images_baseline() {
+    let chosen = r#"{"home_page": "https://judge.example/"}"#;
+    let (dir, root) = stick(&settings(chosen));
+    let live = dir
+        .path()
+        .join("usr/lib/firefox/distribution/policies.json");
+    fs::write(&live, "{ not json").expect("damage");
+    assert!(apply(&root).is_err());
+    assert!(
+        !dir.path()
+            .join("usr/lib/firefox/distribution/policies.json.ck-image")
+            .exists()
+    );
+
+    // Once the file is repaired the next boot works from it.
+    fs::write(&live, IMAGE_POLICIES).expect("repair");
+    apply(&root).expect("apply after the repair");
+    assert_eq!(
+        policies(&dir)["policies"]["Homepage"]["URL"],
+        "https://judge.example/"
+    );
+}

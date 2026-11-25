@@ -381,3 +381,26 @@ fn a_site_list_taken_out_of_the_settings_goes_back_to_the_images_list() {
 "
     );
 }
+
+#[test]
+fn bluetooth_taken_out_of_the_settings_stays_pending_until_it_is_switched_on() {
+    use ck_agent_config::{bluetooth_unblock_pending, finish_bluetooth_unblock};
+
+    let blocked = SETTINGS.replace(
+        r#""site": "Lab 1","#,
+        r#""site": "Lab 1", "block_bluetooth": true,"#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(!bluetooth_unblock_pending(&root));
+
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(bluetooth_unblock_pending(&root));
+    // A boot where rfkill failed leaves it pending; running apply again does not lose it.
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(bluetooth_unblock_pending(&root));
+
+    finish_bluetooth_unblock(&root).expect("done");
+    assert!(!bluetooth_unblock_pending(&root));
+}

@@ -126,7 +126,6 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
         // Bookmarks or a home page from an earlier boot go away with the settings.
         return restore_image_copy(root, FIREFOX_POLICIES);
     }
-    keep_image_copy(root, FIREFOX_POLICIES)?;
     // Always built from the image's own policies, so a bookmark list or home page that was taken out of
     // the settings does not stay from an earlier boot.
     let image_copy = format!("{FIREFOX_POLICIES}.ck-image");
@@ -151,6 +150,8 @@ fn apply_firefox(root: &Root, config: &StickConfig) -> Result<(), Error> {
         .get_mut("policies")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| Error::PoliciesUnreadable("there is no \"policies\" object".to_owned()))?;
+    // Only a file that reads as policies becomes the baseline: a damaged one must not be kept as the image's.
+    keep_image_copy(root, FIREFOX_POLICIES)?;
 
     if !branding.bookmarks.is_empty() {
         let bookmarks: Vec<Value> = branding

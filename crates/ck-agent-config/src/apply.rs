@@ -19,10 +19,19 @@ const SITE: &str = "/etc/ck/site";
 pub const WIFI_CONNECTION: &str = "/etc/NetworkManager/system-connections/ck-wifi.nmconnection";
 /// Exists while the settings ask for Bluetooth to be blocked. The self-test reads it back.
 pub const BLOCK_BLUETOOTH: &str = "/etc/ck/block-bluetooth";
-/// Whether an earlier boot asked for Bluetooth to be blocked (the marker the self-test reads back).
+/// Exists from the boot that stops asking for Bluetooth to be blocked until `rfkill unblock` has worked, so a
+/// failed attempt is tried again at the next boot.
+const UNBLOCK_BLUETOOTH_PENDING: &str = "/etc/ck/unblock-bluetooth";
+
+/// Whether Bluetooth still has to be switched on again after an earlier boot blocked it.
 #[must_use]
-pub fn bluetooth_marked_blocked(root: &Root) -> bool {
-    root.path(BLOCK_BLUETOOTH).exists()
+pub fn bluetooth_unblock_pending(root: &Root) -> bool {
+    root.path(UNBLOCK_BLUETOOTH_PENDING).exists()
+}
+
+/// Says that Bluetooth was switched on again, so the next boot does not try it once more.
+pub fn finish_bluetooth_unblock(root: &Root) -> Result<(), Error> {
+    remove(root, UNBLOCK_BLUETOOTH_PENDING)
 }
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
 
@@ -65,7 +74,18 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
 ",
             0o644,
         )?;
+        remove(root, UNBLOCK_BLUETOOTH_PENDING)?;
     } else {
+        // The pending note goes down before the block marker goes, so a crash in between still unblocks.
+        if root.path(BLOCK_BLUETOOTH).exists() {
+            write(
+                root,
+                UNBLOCK_BLUETOOTH_PENDING,
+                b"1
+",
+                0o644,
+            )?;
+        }
         remove(root, BLOCK_BLUETOOTH)?;
     }
 

@@ -11,7 +11,10 @@ mod root;
 mod trust;
 mod usb_storage;
 
-pub use apply::{BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics, bluetooth_marked_blocked};
+pub use apply::{
+    BLOCK_BLUETOOTH, WIFI_CONNECTION, apply_basics, bluetooth_unblock_pending,
+    finish_bluetooth_unblock,
+};
 pub use branding::apply_branding;
 pub use enrolment::{PendingEnrolment, read_applied_config};
 pub use error::Error;

@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{
-    Error, Root, Trust, apply_basics, apply_branding, bluetooth_marked_blocked, load_for_boot,
-    write_trust,
+    Error, Root, Trust, apply_basics, apply_branding, bluetooth_unblock_pending,
+    finish_bluetooth_unblock, load_for_boot, write_trust,
 };
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
@@ -166,7 +166,6 @@ fn apply_config(root: &Root) -> ExitCode {
     // A failing step must not skip the ones after it: the admin password, the hostname and the radio
     // blocks do not depend on the files written before them. The exit code still says it failed.
     let mut failed = false;
-    let bluetooth_was_blocked = bluetooth_marked_blocked(root);
     if let Err(error) = apply_basics(root, &loaded) {
         tracing::error!("applying the settings failed: {error}");
         failed = true;
@@ -179,8 +178,16 @@ fn apply_config(root: &Root) -> ExitCode {
         set_running_hostname(&loaded.config.computer_name());
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
-        } else if bluetooth_was_blocked {
-            unblock_bluetooth();
+        } else if bluetooth_unblock_pending(root) {
+            if unblock_bluetooth() {
+                if let Err(error) = finish_bluetooth_unblock(root) {
+                    tracing::error!("cannot note that Bluetooth is on again: {error}");
+                    failed = true;
+                }
+            } else {
+                // The note stays, so the next boot tries again.
+                failed = true;
+            }
         }
         if loaded.config.settings.block_usb_storage {
             apply_usb_storage_rules();
@@ -273,14 +280,24 @@ fn block_bluetooth() {
 }
 
 /// Switches Bluetooth on again when an earlier boot blocked it and the settings no longer ask for it.
-fn unblock_bluetooth() {
+/// `true` when the radio is on again (or there is none to switch).
+fn unblock_bluetooth() -> bool {
     match std::process::Command::new("rfkill")
         .args(["unblock", "bluetooth"])
         .status()
     {
-        Ok(status) if status.success() => tracing::info!("Bluetooth unblocked"),
-        Ok(status) => tracing::warn!("rfkill could not unblock Bluetooth ({status})"),
-        Err(error) => tracing::warn!("cannot run rfkill, Bluetooth stays as it is: {error}"),
+        Ok(status) if status.success() => {
+            tracing::info!("Bluetooth unblocked");
+            true
+        }
+        Ok(status) => {
+            tracing::warn!("rfkill could not unblock Bluetooth ({status})");
+            false
+        }
+        Err(error) => {
+            tracing::warn!("cannot run rfkill, Bluetooth stays as it is: {error}");
+            false
+        }
     }
 }
 
