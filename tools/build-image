@@ -492,11 +492,11 @@ echo "== boot loader"
 for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
 if [[ $READ_ONLY_ROOT -eq 1 ]]; then
   # The memory layer is put on the root by the initramfs, so the initramfs is made again with its script.
-  install -m 0755 "$REPO/image/protected/initramfs/hooks/ck-protected" "$MNT/etc/initramfs-tools/hooks/ck-protected"
-  install -m 0755 "$REPO/image/protected/initramfs/scripts/init-bottom/ck-overlay" "$MNT/etc/initramfs-tools/scripts/init-bottom/ck-overlay"
+  install -D -m 0755 "$REPO/image/protected/initramfs/hooks/ck-protected" "$MNT/etc/initramfs-tools/hooks/ck-protected"
+  install -D -m 0755 "$REPO/image/protected/initramfs/scripts/init-bottom/ck-overlay" "$MNT/etc/initramfs-tools/scripts/init-bottom/ck-overlay"
   if [[ $VERITY -eq 1 ]]; then
-    install -m 0755 "$REPO/image/protected/initramfs/hooks/ck-verity" "$MNT/etc/initramfs-tools/hooks/ck-verity"
-    install -m 0755 "$REPO/image/protected/initramfs/scripts/local-top/ck-verity" "$MNT/etc/initramfs-tools/scripts/local-top/ck-verity"
+    install -D -m 0755 "$REPO/image/protected/initramfs/hooks/ck-verity" "$MNT/etc/initramfs-tools/hooks/ck-verity"
+    install -D -m 0755 "$REPO/image/protected/initramfs/scripts/local-top/ck-verity" "$MNT/etc/initramfs-tools/scripts/local-top/ck-verity"
   fi
   chroot "$MNT" update-initramfs -u -k all
 fi
