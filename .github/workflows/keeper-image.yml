@@ -87,7 +87,7 @@ jobs:
       - name: Install Linux image and VM tools
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
+          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring
       # The packages and downloads of the build, kept between runs: the snapshot server is slow to the runners.
       # build-image checks every download against its pinned hash or the signed package index, so a cached
       # file cannot change an image.
