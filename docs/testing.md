@@ -96,7 +96,7 @@ this image's systemd.
 
 ## Image profiles and the protected image in CI (2026-11-25)
 
-`image-profiles.yml` builds each profile and boots it with KVM in QEMU: UEFI, Secure Boot and BIOS for the normal images (debian, mint),
+`image-profiles.yml` builds the `debian` profile and boots it with KVM in QEMU: UEFI, Secure Boot and BIOS for the normal image,
 and UEFI only for the protected variants, which are built on Debian only (see [protected-image.md](protected-image.md)).
 
 Not run, and not run by anyone yet:
