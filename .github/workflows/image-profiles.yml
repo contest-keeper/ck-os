@@ -72,7 +72,10 @@ jobs:
             sleep 1500
             echo "::warning::the image build is still running after 25 minutes; process list follows"
             ps -eo pid,ppid,etime,stat,wchan:24,args --forest | cut -c1-200
-            sudo ss -tnp 2>/dev/null | head -30
+            sudo ss -tinp 2>/dev/null | grep -A1 ':443' | head -30
+            # The file apt is fetching right now, and how much of it has arrived.
+            sudo find /tmp -path '*/var/cache/apt/archives/partial/*' -ls 2>/dev/null | head
+            sudo find /tmp -path '*/var/cache/apt/archives/*.deb' -newermt '-2 minutes' -ls 2>/dev/null | head
             sudo pkill -f tools/build-image
           ) &
           watchdog=$!
