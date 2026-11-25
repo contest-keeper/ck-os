@@ -65,6 +65,8 @@ elif action == "upload":
         "metadata": metadata,
         "properties": {"etag": "etag-" + str(len(state["calls"]))},
     }
+elif action == "delete":
+    del blobs[name]
 else:
     sys.exit(f"unexpected Azure command: {action}")
 state_path.write_text(json.dumps(state))
@@ -138,6 +140,33 @@ class ImagePublishTests(unittest.TestCase):
         self.assertEqual(images[0], old_image)
         self.assertEqual(images[1]["sha256"], self.sha)
         self.assertIn(f'attachment; filename="{NAME}"', uploads[0][1])
+
+    def test_only_the_newest_two_images_of_each_family_stay(self):
+        def listed(family, version):
+            image_id = f"keeper-os-{version}"
+            return {"id": image_id, "version": version, "family": family, "filename": f"{image_id}.img.zst",
+                    "blob": f"images/{image_id}.img.zst", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt"}
+
+        old = [listed("ubuntu", "1.2.0"), listed("debian", "1.2.0-debian"), listed("ubuntu", "1.2.1"),
+               listed("ubuntu", "1.2.2")]
+        blobs = {INDEX: {"data": json.dumps({"images": old}).encode().hex(), "properties": {"etag": "e"}}}
+        for image in old:
+            for name in (image["blob"], f"images/{image['filename']}.sha256", f"images/{image['id']}.packages.txt",
+                         image["source_offer"]):
+                blobs[name] = {"data": "", "metadata": {}, "properties": {"etag": "x"}}
+        self.state.write_text(json.dumps({"calls": [], "blobs": blobs}))
+        run = self.run_publish("--account", "cktest")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        state = self.storage()
+        index = json.loads(bytes.fromhex(state["blobs"][INDEX]["data"]))
+        self.assertEqual([image["id"] for image in index["images"]],
+                         ["keeper-os-1.2.0-debian", "keeper-os-1.2.2", "keeper-os-1.2.3"])
+        self.assertNotIn("images/keeper-os-1.2.0.img.zst", state["blobs"])
+        self.assertNotIn("images/keeper-os-1.2.1.SOURCE-OFFER.txt", state["blobs"])
+        self.assertIn("images/keeper-os-1.2.2.img.zst", state["blobs"])
+        self.assertIn("images/keeper-os-1.2.0-debian.img.zst", state["blobs"])
+        actions = [(action, name) for action, name, _ in state["calls"] if action in ("upload", "delete")]
+        self.assertLess(actions.index(("upload", INDEX)), actions.index(("delete", "images/keeper-os-1.2.0.img.zst")))
 
     def test_invalid_checksum_stops_before_contacting_storage(self):
         (self.files / NAME).write_bytes(b"a different archive")
