@@ -39,10 +39,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The Ubuntu archive snapshot server answers slowly to the runners at times (the package install of
+          # the image took over 20 minutes and never finished). A boot test does not need the pinned snapshot, so
+          # it takes the archive mirror the runners themselves use. The published image (keeper-image.yml) still
+          # builds from the snapshot.
           - profile: ubuntu
             checks: true
+            mirror: http://azure.archive.ubuntu.com/ubuntu
           - profile: debian
             checks: false
+            mirror: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -79,7 +85,7 @@ jobs:
             sudo pkill -f tools/build-image
           ) &
           watchdog=$!
-          sudo tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
+          sudo env CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys tools/ci-test-config-keys --serial-console --debug-login
           kill "$watchdog"
