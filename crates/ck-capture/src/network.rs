@@ -361,7 +361,8 @@ mod tests {
         let mut tail = Tail::new(log.clone(), 0, 0);
         assert_eq!(tail.read_new().unwrap().len(), 1);
         // Rotation: a new, longer file.
-        std::fs::remove_file(&log).unwrap();
+        // The old file is kept (renamed) so its inode cannot be handed to the new one.
+        std::fs::rename(&log, dir.path().join("access.log.1")).unwrap();
         std::fs::write(&log, format!("{GET}\n{GET}\n{GET}\n")).unwrap();
         assert_eq!(tail.read_new().unwrap().len(), 3);
 
