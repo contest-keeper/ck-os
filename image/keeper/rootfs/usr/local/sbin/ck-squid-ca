@@ -4,12 +4,18 @@
 #
 # The CA is short lived: a key copied from a stick's disk stops being useful after a few weeks. A CA with under
 # a week left is replaced at boot (before Squid starts) and the old one is taken out of the system trust.
+# --force replaces it whatever its dates say (ck-squid-ca-renew uses it for a CA that is not valid yet).
+# CK_ROOT is a prefix for the tests; it is empty on the stick.
 set -eu
-dir=/etc/ck/squid-ca
-trusted=/usr/local/share/ca-certificates/ck-squid-ca.crt
+root=${CK_ROOT:-}
+dir=$root/etc/ck/squid-ca
+trusted=$root/usr/local/share/ca-certificates/ck-squid-ca.crt
+ssl_db=$root/var/lib/squid/ssl_db
 renewed=
+force=
+[ "${1:-}" = --force ] && force=1
 
-if [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ] || ! openssl x509 -checkend 604800 -noout -in "$dir/ca.crt" >/dev/null; then
+if [ -n "$force" ] || [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ] || ! openssl x509 -checkend 604800 -noout -in "$dir/ca.crt" >/dev/null; then
   if [ -e "$trusted" ]; then
     rm -f "$trusted"
     update-ca-certificates
@@ -22,6 +28,9 @@ if [ ! -s "$dir/ca.crt" ] || [ ! -s "$dir/ca.key" ] || ! openssl x509 -checkend 
     -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -keyout "$dir/ca.key" -out "$dir/ca.crt"
   rm -f "$trusted"
+  # Squid's certificate database holds leaf certificates signed by the old CA; with the new CA they would be
+  # served as they are and no browser would accept them. certgen makes the database again below.
+  rm -rf "$ssl_db"
 fi
 # Squid (user proxy) reads the key; everyone may read the certificate, so the browser can trust it.
 chmod 0755 "$dir"
@@ -36,12 +45,15 @@ if [ ! -e "$trusted" ]; then
   # The system store is updated, but Java's keeps its entry under the same name, so replace it by hand.
   if [ -n "$renewed" ] && command -v keytool >/dev/null; then
     keytool -delete -cacerts -storepass changeit -alias debian:ck-squid-ca.pem >/dev/null 2>&1 || true
-    keytool -importcert -noprompt -cacerts -storepass changeit -alias debian:ck-squid-ca.pem -file "$dir/ca.crt" >/dev/null
+    # Java's store only matters for contestants' Java programs that call https; a failure here must not stop
+    # Squid (it Requires this unit), so it is reported and the boot goes on.
+    keytool -importcert -noprompt -cacerts -storepass changeit -alias debian:ck-squid-ca.pem -file "$dir/ca.crt" >/dev/null ||
+      echo "ck-squid-ca: could not add the CA to Java's certificate store" >&2
   fi
 fi
 
 # The folder is not made by the package; certgen runs as proxy and needs to create the database in it.
-install -d -o proxy -g proxy -m 0750 /var/lib/squid
-if [ ! -d /var/lib/squid/ssl_db ]; then
-  runuser -u proxy -- /usr/lib/squid/security_file_certgen -c -s /var/lib/squid/ssl_db -M 16MB
+install -d -o proxy -g proxy -m 0750 "$root/var/lib/squid"
+if [ ! -d "$ssl_db" ]; then
+  runuser -u proxy -- /usr/lib/squid/security_file_certgen -c -s "$ssl_db" -M 16MB
 fi
