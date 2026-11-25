@@ -80,6 +80,10 @@ class SquidCaTests(unittest.TestCase):
         subprocess.run(["openssl", "ca", "-batch", "-selfsign", "-config", str(config), "-keyfile", str(key), "-in", str(csr),
                         "-out", str(crt), "-startdate", start, "-enddate", end, "-notext"], check=True, capture_output=True)
 
+    def fingerprint(self):
+        return subprocess.run(["openssl", "x509", "-in", str(self.ca / "ca.crt"), "-noout", "-fingerprint", "-sha256"],
+                              capture_output=True, text=True).stdout
+
     def serial(self):
         return subprocess.run(["openssl", "x509", "-noout", "-serial", "-in", str(self.ca / "ca.crt")],
                               capture_output=True, text=True).stdout
@@ -100,13 +104,15 @@ class SquidCaTests(unittest.TestCase):
         self.ssl_db.mkdir(parents=True)
         (self.ssl_db / "index.txt").write_text("old database\n")
         (self.root / "usr/local/share/ca-certificates/ck-squid-ca.crt").write_text("old")
+        # The database was made for the old CA and says so.
+        self.ssl_db.with_name("ssl_db.ca").write_text(self.fingerprint())
         before = self.serial()
         result = self.run_script("ck-squid-ca", certgen_fails=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotEqual(self.serial(), before, "the new CA was not made, so this does not test the failure")
         self.assertTrue((self.ssl_db / "index.txt").exists(), "Squid was left without its database")
         # The next run must notice that the database belongs to the old CA, although the CA itself is fine now.
-        again = self.run_script("ck-squid-ca")
+        again = self.run_script("ck-squid-ca-renew")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertFalse((self.ssl_db / "index.txt").exists(), "the database of the old CA was kept")
 

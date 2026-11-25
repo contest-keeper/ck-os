@@ -21,11 +21,26 @@ not_valid_yet() {
   [ "$started" -gt $(($(date +%s) + 300)) ]
 }
 
+# True when Squid's certificate database was not made for this CA (a renewal that failed half way); ck-squid-ca keeps
+# the fingerprint of the CA it made the database for.
+database_stale() {
+  [ "$(cat "$root/var/lib/squid/ssl_db.ca" 2>/dev/null || true)" != "$(openssl x509 -in "$ca" -noout -fingerprint -sha256 2>/dev/null)" ]
+}
+
+ca_fine=
 if openssl x509 -checkend 604800 -noout -in "$ca" >/dev/null 2>&1 && ! not_valid_yet; then
+  ca_fine=1
+fi
+if [ -n "$ca_fine" ] && ! database_stale; then
   exit 0
 fi
 # Squid is stopped while its certificate database is thrown away and made again for the new CA. If the new CA
 # cannot be made, Squid still gets started, so the stick keeps its proxy (and the unit shows as failed).
 systemctl stop squid.service
 trap 'systemctl start squid.service' EXIT
-"$root/usr/local/sbin/ck-squid-ca" --force
+if [ -n "$ca_fine" ]; then
+  # Only the database is wrong: ck-squid-ca makes it again for the CA that is there.
+  "$root/usr/local/sbin/ck-squid-ca"
+else
+  "$root/usr/local/sbin/ck-squid-ca" --force
+fi

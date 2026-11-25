@@ -22,6 +22,8 @@ STUBS = {
 }
 for name in ("systemctl", "loginctl", "pkill", "userdel", "useradd", "passwd", "chage", "ipcrm", "chmod", "sync"):
     STUBS[name] = LOG
+# mv is logged and then really done, so the order of the rename and the syncs can be checked.
+STUBS["mv"] = LOG + 'exec /bin/mv "$@"\n'
 
 
 class TeamResetTests(unittest.TestCase):
@@ -82,9 +84,12 @@ class TeamResetTests(unittest.TestCase):
         self.assertEqual(self.run_reset().returncode, 0)
         calls = self.calls_text().splitlines()
         syncs = [i for i, call in enumerate(calls) if call.startswith("sync ")]
+        rename = next(i for i, call in enumerate(calls) if call.startswith("mv "))
         userdel = calls.index(next(call for call in calls if call.startswith("userdel")))
         self.assertEqual(len(syncs), 2, calls)
-        self.assertTrue(all(i < userdel for i in syncs), "a sync came after userdel")
+        self.assertLess(syncs[0], rename, "the file was not synced before the rename")
+        self.assertLess(rename, syncs[1], "the rename was not synced after it")
+        self.assertLess(syncs[1], userdel, "the account was deleted before the rename reached the disk")
 
     def test_a_saved_uid_that_is_not_a_number_is_refused(self):
         for text in ("abc\n", "1000; rm -rf /\n", "", "-1\n"):
