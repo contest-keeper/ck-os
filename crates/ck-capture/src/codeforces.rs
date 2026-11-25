@@ -98,6 +98,10 @@ fn submission_from(request: &Request) -> Option<Pending> {
         ],
     );
     if text(&fields, "action").as_deref() != Some(SUBMIT_ACTION) {
+        // A body cut by the preview before the action field is not seen as a submission.
+        if request.body_truncated && !request.body.is_empty() {
+            tracing::debug!("a POST to codeforces was cut before its action field; not recorded");
+        }
         return None;
     }
     // The code is in a text field or in an uploaded file.
