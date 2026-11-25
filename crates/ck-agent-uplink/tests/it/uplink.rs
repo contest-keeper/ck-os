@@ -802,7 +802,7 @@ fn an_answer_that_redirects_is_not_the_hubs_and_the_event_stays_queued() {
 
 #[test]
 fn one_flush_sends_a_bounded_number_of_events() {
-    let hub = fake_hub(vec![200; 100]);
+    let hub = fake_hub(vec![200; 101]);
     let dir = TempDir::new().expect("temp dir");
     machine(dir.path(), &hub.base);
     let uplink = Uplink::load(dir.path()).expect("load");

@@ -15,7 +15,7 @@ pub use recordings::RecordingError;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ck_agent_config::{PendingEnrolment, Root, read_applied_config};
 use ck_protocol::{
@@ -30,6 +30,8 @@ pub const EVENTS_PATH: &str = "/api/v1/events";
 /// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
 /// Events sent in one `flush`: each one is a request with its own connection.
 const MAX_PER_FLUSH: usize = 100;
+/// Time after which a flush stops starting new requests.
+const FLUSH_BUDGET: Duration = Duration::from_secs(20);
 const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
 /// The most the Hub may answer with. A few commands are a few kilobytes.
 const MAX_ANSWER_BYTES: u64 = 64 * 1024;
@@ -206,7 +208,12 @@ impl Uplink {
     /// heartbeats and commands that share the loop; the next round sends the rest.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
+        let started = Instant::now();
         for (counter, event) in queue.pending()?.into_iter().take(MAX_PER_FLUSH) {
+            // Slow answers must not hold the loop for minutes either.
+            if sent > 0 && started.elapsed() >= FLUSH_BUDGET {
+                break;
+            }
             match self.post(url, &event.canonical_bytes()) {
                 Ok(_) | Err(Error::Rejected(409)) => {
                     queue.remove(counter)?;
