@@ -16,7 +16,12 @@ esac
 # shellcheck disable=SC1091
 . /scripts/functions
 
-grep -qw 'ck.overlay=1' /proc/cmdline || exit 0
+# The shell here is busybox: plain POSIX only, so the word is looked for with case and not with grep options.
+read -r cmdline </proc/cmdline
+case " $cmdline " in
+  *" ck.overlay=1 "*) ;;
+  *) exit 0 ;;
+esac
 
 ro=/ck-ro
 rw=/ck-rw
