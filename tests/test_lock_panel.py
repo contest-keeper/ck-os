@@ -39,3 +39,16 @@ class LockPanelTest(unittest.TestCase):
         plugins = panel.findall("./property[@name='plugins']/property")
         self.assertEqual([plugin.get("name") for plugin in plugins], ["plugin-19"])
         self.assertIsNotNone(panel.find(".//value[@value='xfce4-web-browser.desktop']"))
+
+    def test_fails_when_the_panel_has_no_launcher_it_knows(self):
+        # XFCE renamed its launchers: nothing would be removed, so the build must stop instead of shipping a terminal.
+        script = Path(__file__).resolve().parents[1] / "image/keeper/lock-panel.py"
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "default.xml"
+            config.write_text('''<channel name="xfce4-panel"><property name="plugins">
+                <property name="plugin-17" value="launcher"><property name="items">
+                  <value value="xfce4-new-terminal.desktop"/>
+                </property></property></property></channel>''', encoding="utf-8")
+            result = subprocess.run([sys.executable, script, config], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lock-panel", result.stderr)
