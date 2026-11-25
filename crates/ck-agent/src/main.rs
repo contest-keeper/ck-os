@@ -384,27 +384,56 @@ impl ck_capture::EventSink for QueuedEvents {
     }
 }
 
-fn queued_events(root: &std::path::Path) -> std::sync::Arc<dyn ck_capture::EventSink> {
-    let queue = Queue::open(root.join(QUEUE_FOLDER));
-    match (Uplink::load(root), queue) {
-        (Ok(uplink), Ok(queue)) => {
-            let (stick, boot) = uplink.identity();
-            std::sync::Arc::new(QueuedEvents {
-                queue,
-                stick: stick.clone(),
-                boot: boot.to_owned(),
-                one_at_a_time: std::sync::Mutex::new(()),
-            })
+/// Opens the queue on the first event it can, and tries again on the next one while it cannot
+/// (settings may arrive after the capture service has started).
+struct LazyEvents {
+    root: PathBuf,
+    ready: std::sync::Mutex<Option<QueuedEvents>>,
+    warned: std::sync::atomic::AtomicBool,
+}
+
+impl LazyEvents {
+    fn open(&self) -> Result<QueuedEvents, String> {
+        let uplink = Uplink::load(&self.root).map_err(|e| e.to_string())?;
+        let queue = Queue::open(self.root.join(QUEUE_FOLDER)).map_err(|e| e.to_string())?;
+        let (stick, boot) = uplink.identity();
+        Ok(QueuedEvents {
+            queue,
+            stick: stick.clone(),
+            boot: boot.to_owned(),
+            one_at_a_time: std::sync::Mutex::new(()),
+        })
+    }
+}
+
+impl ck_capture::EventSink for LazyEvents {
+    fn send(&self, kind: ck_capture::EventKind, payload: serde_json::Value) -> Result<(), String> {
+        let mut ready = self.ready.lock().map_err(|e| e.to_string())?;
+        if ready.is_none() {
+            match self.open() {
+                Ok(events) => *ready = Some(events),
+                Err(error) => {
+                    // Say it once, not for every event.
+                    if !self.warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!("events cannot be queued yet, so they are dropped: {error}");
+                    }
+                    return Err(error);
+                }
+            }
         }
-        (uplink, queue) => {
-            tracing::warn!(
-                "events cannot be queued, so they are dropped ({:?}, {:?})",
-                uplink.err().map(|e| e.to_string()),
-                queue.err().map(|e| e.to_string())
-            );
-            std::sync::Arc::new(ck_capture::NoEvents)
+        match ready.as_ref() {
+            Some(events) => events.send(kind, payload),
+            None => Err("no queue".to_owned()),
         }
     }
+}
+
+fn queued_events(root: &std::path::Path) -> std::sync::Arc<dyn ck_capture::EventSink> {
+    std::sync::Arc::new(LazyEvents {
+        root: root.to_owned(),
+        ready: std::sync::Mutex::new(None),
+        warned: std::sync::atomic::AtomicBool::new(false),
+    })
 }
 
 fn self_test(
