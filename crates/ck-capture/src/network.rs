@@ -20,6 +20,8 @@ const ENTRIES_PER_EVENT: usize = 30;
 /// How much of the log one round reads, so a burst of traffic goes out over a few rounds and stays
 /// under the Hub's limit on messages per minute.
 const READ_PER_ROUND: u64 = 64 * 1024;
+/// Serialized size of the entries of one event, under the queue's 16 KB payload limit.
+const MAX_EVENT_BYTES: usize = 12 * 1024;
 const MAX_HOST: usize = 80;
 const MAX_PATH: usize = 100;
 const MAX_TYPE: usize = 40;
@@ -60,8 +62,10 @@ fn site_and_path<'a>(method: &str, url: &'a str) -> (&'a str, &'a str) {
         return (url, "");
     }
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let (authority, path) = match rest.find('/') {
-        Some(at) => rest.split_at(at),
+    // The authority ends at the first `/`, `?` or `#`; `host?x=1` has no path.
+    let (authority, path) = match rest.find(['/', '?', '#']) {
+        Some(at) if rest[at..].starts_with('/') => rest.split_at(at),
+        Some(at) => (&rest[..at], "/"),
         None => (rest, "/"),
     };
     let host = authority.rsplit('@').next().unwrap_or(authority);
@@ -69,14 +73,45 @@ fn site_and_path<'a>(method: &str, url: &'a str) -> (&'a str, &'a str) {
     (host, path)
 }
 
+/// At most `longest` bytes, cut on a character boundary: the queue limit is in bytes.
 fn cut(text: &str, longest: usize) -> String {
-    text.chars().take(longest).collect()
+    let mut end = text.len().min(longest);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+/// Splits entries into events that stay under the queue's payload limit, however the text is
+/// escaped in JSON.
+fn batches(entries: Vec<Value>) -> Vec<Vec<Value>> {
+    let mut all = Vec::new();
+    let mut batch = Vec::new();
+    let mut size = 0;
+    for entry in entries {
+        let length = entry.to_string().len() + 1;
+        if !batch.is_empty()
+            && (batch.len() == ENTRIES_PER_EVENT || size + length > MAX_EVENT_BYTES)
+        {
+            all.push(std::mem::take(&mut batch));
+            size = 0;
+        }
+        size += length;
+        batch.push(entry);
+    }
+    if !batch.is_empty() {
+        all.push(batch);
+    }
+    all
 }
 
 /// Reads the lines added to a log, from where the last read stopped.
 pub struct Tail {
     path: PathBuf,
     offset: u64,
+    /// The identity of the log file, to see a rotation that left a longer file.
+    #[cfg(unix)]
+    inode: Option<u64>,
     /// Lines from before this time (seconds since 1970) are from an earlier boot.
     since: i64,
 }
@@ -86,8 +121,15 @@ impl Tail {
         Self {
             path,
             offset,
+            #[cfg(unix)]
+            inode: None,
             since,
         }
+    }
+
+    /// Goes back to an earlier place, so entries that could not be queued are read again.
+    pub fn rewind(&mut self, offset: u64) {
+        self.offset = offset;
     }
 
     pub fn offset(&self) -> u64 {
@@ -103,13 +145,27 @@ impl Tail {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
-        if file.metadata()?.len() < self.offset {
+        let meta = file.metadata()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if self.inode.is_some_and(|inode| inode != meta.ino()) {
+                self.offset = 0;
+            }
+            self.inode = Some(meta.ino());
+        }
+        if meta.len() < self.offset {
             self.offset = 0;
         }
         file.seek(SeekFrom::Start(self.offset))?;
         let mut chunk = Vec::new();
         file.take(READ_PER_ROUND).read_to_end(&mut chunk)?;
         let Some(end) = chunk.iter().rposition(|&byte| byte == b'\n') else {
+            // A whole round without a line end is not a log line: skip it, or the tail would
+            // stall on it for ever.
+            if chunk.len() as u64 == READ_PER_ROUND {
+                self.offset += READ_PER_ROUND;
+            }
             return Ok(Vec::new());
         };
         self.offset += end as u64 + 1;
@@ -141,16 +197,23 @@ pub fn follow(
         .unwrap_or(0);
     let mut tail = Tail::new(log.to_owned(), offset, since);
     loop {
+        let before = tail.offset();
         match tail.read_new() {
             Ok(entries) if entries.is_empty() => {}
             Ok(entries) => {
-                for batch in entries.chunks(ENTRIES_PER_EVENT) {
+                let mut queued = true;
+                for batch in batches(entries) {
                     if let Err(error) = events.send(EventKind::Network, json!({ "entries": batch }))
                     {
                         tracing::warn!("network entries could not be queued: {error}");
+                        queued = false;
+                        break;
                     }
                 }
-                if let Err(error) = std::fs::write(state, tail.offset().to_string()) {
+                if !queued {
+                    // Read the round again next time: a repeat is better than a hole in the log.
+                    tail.rewind(before);
+                } else if let Err(error) = std::fs::write(state, tail.offset().to_string()) {
                     tracing::warn!("cannot remember how far the log was read: {error}");
                 }
             }
@@ -271,6 +334,50 @@ mod tests {
             self.0.lock().unwrap().push(payload);
             Ok(())
         }
+    }
+
+    #[test]
+    fn long_text_is_cut_in_bytes_and_batches_stay_under_the_queue_limit() {
+        let cut_text = cut(&"\u{e9}".repeat(100), 81);
+        assert_eq!(cut_text.len(), 80);
+        let long = "\u{1}".repeat(MAX_PATH);
+        let entry = parse_line(&format!(
+            "1.0 1 c TCP_MISS/200 1 GET http://a.org/{long} - - -"
+        ))
+        .unwrap();
+        let all = batches(vec![entry; 100]);
+        assert!(all.len() > 1);
+        for batch in all {
+            let size = json!({ "entries": batch }).to_string().len();
+            assert!(size <= 16 * 1024, "{size}");
+        }
+    }
+
+    #[test]
+    fn a_rotated_longer_log_and_a_line_without_end_do_not_stall_the_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("access.log");
+        std::fs::write(&log, format!("{GET}\n")).unwrap();
+        let mut tail = Tail::new(log.clone(), 0, 0);
+        assert_eq!(tail.read_new().unwrap().len(), 1);
+        // Rotation: a new, longer file.
+        std::fs::remove_file(&log).unwrap();
+        std::fs::write(&log, format!("{GET}\n{GET}\n{GET}\n")).unwrap();
+        assert_eq!(tail.read_new().unwrap().len(), 3);
+
+        let junk = dir.path().join("junk.log");
+        std::fs::write(&junk, vec![b'x'; 70_000]).unwrap();
+        let mut tail = Tail::new(junk.clone(), 0, 0);
+        assert_eq!(tail.read_new().unwrap().len(), 0);
+        assert_eq!(tail.offset(), READ_PER_ROUND);
+    }
+
+    #[test]
+    fn a_url_with_a_query_and_no_path_keeps_the_query_out_of_the_host() {
+        let line = "1.0 1 c TCP_MISS/200 1 GET http://a.org?token=SECRET - - -";
+        let entry = parse_line(line).unwrap();
+        assert_eq!(entry["host"], "a.org");
+        assert_eq!(entry["path"], "/");
     }
 
     #[test]

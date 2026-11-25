@@ -30,7 +30,8 @@ impl Head {
             Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
             _ => authority,
         };
-        host.to_ascii_lowercase()
+        // `codeforces.com.` is the same name; the rule compares without the dot.
+        host.trim_end_matches('.').to_ascii_lowercase()
     }
 
     /// The path and the query, without the server.
@@ -112,6 +113,13 @@ mod tests {
         assert_eq!(head.path(), "/enter");
         assert_eq!(head.query(), "a=1&b=2");
         assert_eq!(head.header("content-type"), Some("text/plain"));
+    }
+
+    #[test]
+    fn a_trailing_dot_does_not_change_the_host() {
+        let head =
+            parse_request_head(b"GET https://Codeforces.com.:443/a HTTP/1.1\r\n\r\n").unwrap();
+        assert_eq!(head.host(), "codeforces.com");
     }
 
     #[test]
