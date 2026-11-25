@@ -1,0 +1,45 @@
+#!/bin/sh
+# shellcheck disable=SC2154 # panic comes from /scripts/functions
+# Runs in the initramfs before the root filesystem is mounted. Opens the root partition through dm-verity with the root
+# hash from the kernel command line, so a block that was changed since the image was built cannot be read: the mount
+# fails and the stick does not boot. Only active with ck.verity=1; the hash comes from ck.roothash= (GRUB takes it
+# from the EFI partition, a signed UKI carries it inside the signature).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in
+  prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+# shellcheck disable=SC1091
+. /scripts/functions
+
+grep -qw 'ck.verity=1' /proc/cmdline || exit 0
+
+roothash=
+read -r cmdline </proc/cmdline
+for word in $cmdline; do
+  case $word in
+    ck.roothash=*) roothash=${word#ck.roothash=} ;;
+  esac
+done
+# A missing or damaged hash must stop the boot, not fall back to the unprotected root: the whole point is that
+# nobody can boot a changed root.
+case $roothash in
+  *[!0-9a-f]* | '') panic "ck-verity: the kernel command line has no valid ck.roothash" ;;
+esac
+[ "${#roothash}" -eq 64 ] || panic "ck-verity: ck.roothash is not a SHA-256 root hash"
+
+wait_for_udev 10
+data=/dev/disk/by-partlabel/CKROOT
+hash=/dev/disk/by-partlabel/CKVERITY
+tries=0
+while [ ! -b "$data" ] || [ ! -b "$hash" ]; do
+  tries=$((tries + 1))
+  [ "$tries" -le 60 ] || panic "ck-verity: the CKROOT and CKVERITY partitions did not appear"
+  sleep 0.5
+  wait_for_udev 1
+done
+modprobe dm_verity || true
+veritysetup open "$data" ckroot "$hash" "$roothash" || panic "ck-verity: the root partition does not match its hash tree"

@@ -2,7 +2,7 @@
 # Builds the Keeper OS disk image from stock Ubuntu 24.04 (see docs/base-images.md).
 # Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3
 # (and gpg and dpkg-deb for --profile mint).
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint] [--read-only-root]
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint] [--read-only-root] [--verity]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -18,6 +18,10 @@ ROOT_UUID=6b8a1c10-0000-4c4b-8000-0000000000a4
 STATE_GUID=6b8a1c10-0000-4c4b-8000-000000000005
 STATE_UUID=6b8a1c10-0000-4c4b-8000-0000000000a5
 STATE_HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b5
+VERITY_SALT=6b8a1c10000000004c4b8000000000b66b8a1c10000000004c4b8000000000b6 # fixed, so the same root gives the same root hash
+VERITY_UUID=6b8a1c10-0000-4c4b-8000-0000000000b6
+HASH_GUID=6b8a1c10-0000-4c4b-8000-000000000006
+HASH_SIZE=96MiB # a SHA-256 hash tree over 6 GiB of 4 KiB blocks needs about 49 MB
 ROOT_SIZE=6GiB # the fixed root partition of a --read-only-root image; the state partition takes the rest
 HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b4
 ESP_SERIAL=6B8A0002
@@ -28,6 +32,7 @@ SIZE=8G
 DEBUG_LOGIN=0
 SERIAL_CONSOLE=0
 READ_ONLY_ROOT=0
+VERITY=0
 COMPRESS=1
 CONFIG_PUBLIC_KEYS=""
 
@@ -73,6 +78,11 @@ while [[ $# -gt 0 ]]; do
       READ_ONLY_ROOT=1
       shift
       ;; # root partition mounted read-only with a memory layer on top, and a CKSTATE partition for /var and /home
+    --verity)
+      VERITY=1
+      READ_ONLY_ROOT=1
+      shift
+      ;; # --read-only-root, and the root is opened through dm-verity with a root hash from the kernel command line (UEFI only)
     --serial-console)
       SERIAL_CONSOLE=1
       shift
@@ -154,6 +164,8 @@ CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
 # and that Firefox trusts the CA. Contestants get none.
 EXTRA_PACKAGES=
 [[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl,libnss3-tools
+# veritysetup, for the initramfs hook and for the root hash checks of the verity image.
+[[ $VERITY -eq 1 ]] && EXTRA_PACKAGES=${EXTRA_PACKAGES:+$EXTRA_PACKAGES,}cryptsetup-bin
 
 if [[ $EUID -ne 0 ]]; then
   echo "run as root" >&2
@@ -204,6 +216,15 @@ if [[ $READ_ONLY_ROOT -eq 1 ]]; then
   root_line="size=$ROOT_SIZE, $root_line, name=CKROOT"
   state_line="type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$STATE_GUID, name=CKSTATE"
 fi
+# The state partition is last so it can grow; the verity hash tree sits between it and the root.
+STATE_PART=5
+HASH_PART=
+if [[ $VERITY -eq 1 ]]; then
+  root_line="$root_line
+size=$HASH_SIZE, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$HASH_GUID, name=CKVERITY"
+  STATE_PART=6
+  HASH_PART=5
+fi
 {
   cat <<EOF
 label: gpt
@@ -221,7 +242,7 @@ mkfs.vfat -F 16 -n CKCONFIG -i "$CFG_SERIAL" "${LOOP}p3" >/dev/null
 # E2FSPROGS_FAKE_TIME fixes the creation time; hash_seed and the UUID are otherwise random.
 E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKROOT -U "$ROOT_UUID" -E hash_seed="$HASH_SEED" "${LOOP}p4"
 if [[ $READ_ONLY_ROOT -eq 1 ]]; then
-  E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKSTATE -U "$STATE_UUID" -E hash_seed="$STATE_HASH_SEED" "${LOOP}p5"
+  E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKSTATE -U "$STATE_UUID" -E hash_seed="$STATE_HASH_SEED" "${LOOP}p$STATE_PART"
 fi
 
 echo "== mount and install base system"
@@ -380,6 +401,9 @@ EOF
 mkdir -p "$MNT/etc/default/grub.d"
 ck_cmdline_extra=
 [[ $READ_ONLY_ROOT -eq 1 ]] && ck_cmdline_extra=" ck.overlay=1"
+# The root hash is not known yet and cannot be in the root it protects: grub.cfg gets a variable that the EFI
+# partition's stub sets (see the verity step below). root= comes last on the line, so it wins over GRUB's own.
+[[ $VERITY -eq 1 ]] && ck_cmdline_extra="$ck_cmdline_extra ck.verity=1 ck.roothash=@ROOTHASH@ root=/dev/mapper/ckroot"
 if [[ $SERIAL_CONSOLE -eq 1 ]]; then
   cat >"$MNT/etc/default/grub.d/ck.cfg" <<EOF
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 lockdown=integrity$ck_cmdline_extra"
@@ -447,6 +471,10 @@ if [[ $READ_ONLY_ROOT -eq 1 ]]; then
   # The memory layer is put on the root by the initramfs, so the initramfs is made again with its script.
   install -m 0755 "$REPO/image/protected/initramfs/hooks/ck-protected" "$MNT/etc/initramfs-tools/hooks/ck-protected"
   install -m 0755 "$REPO/image/protected/initramfs/scripts/init-bottom/ck-overlay" "$MNT/etc/initramfs-tools/scripts/init-bottom/ck-overlay"
+  if [[ $VERITY -eq 1 ]]; then
+    install -m 0755 "$REPO/image/protected/initramfs/hooks/ck-verity" "$MNT/etc/initramfs-tools/hooks/ck-verity"
+    install -m 0755 "$REPO/image/protected/initramfs/scripts/local-top/ck-verity" "$MNT/etc/initramfs-tools/scripts/local-top/ck-verity"
+  fi
   chroot "$MNT" update-initramfs -u -k all
 fi
 
@@ -517,6 +545,16 @@ if ! grep -q 'custom\.cfg' "$MNT/boot/grub/grub.cfg" || ! grep -q '^menuentry ' 
   exit 1
 fi
 sed -i '/^menuentry .*--unrestricted/!s/^menuentry /menuentry --unrestricted /' "$MNT/boot/grub/grub.cfg"
+if [[ $VERITY -eq 1 ]]; then
+  # The root hash is a GRUB variable set by the stub on the EFI partition; the single quotes keep ${ck_roothash} for GRUB.
+  # shellcheck disable=SC2016
+  sed -i 's/ck\.roothash=@ROOTHASH@/ck.roothash=${ck_roothash}/' "$MNT/boot/grub/grub.cfg"
+  # shellcheck disable=SC2016
+  if grep -q '@ROOTHASH@' "$MNT/boot/grub/grub.cfg" || ! grep -q 'ck\.roothash=\${ck_roothash}' "$MNT/boot/grub/grub.cfg"; then
+    echo "ERROR: grub.cfg does not take the root hash from the EFI partition" >&2
+    exit 1
+  fi
+fi
 chmod 0600 "$MNT/boot/grub/grub.cfg"
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
@@ -530,8 +568,8 @@ if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
     config_keys="test"
   fi
 fi
-printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\n' \
-  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" >"$OUT/keeper-os-$VERSION.build.txt"
+printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\nread_only_root=%s\nverity=%s\n' \
+  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" "$READ_ONLY_ROOT" "$VERITY" >"$OUT/keeper-os-$VERSION.build.txt"
 
 # The name resolver stub at 127.0.0.53 answers anyone, so the network lock does not let it out; resolv.conf
 # names the router's servers directly and Squid asks them itself (see netlock.nft).
@@ -594,7 +632,7 @@ if [[ $READ_ONLY_ROOT -eq 1 ]]; then
   # /var and /home move to the state partition: the bind mounts in fstab show them from there, and what stays in the
   # read-only root under the same names is never seen.
   STATE_MNT=$(mktemp -d)
-  mount "${LOOP}p5" "$STATE_MNT"
+  mount "${LOOP}p$STATE_PART" "$STATE_MNT"
   cp -a "$MNT/var" "$STATE_MNT/var"
   cp -a "$MNT/home" "$STATE_MNT/home"
   umount "$STATE_MNT"
@@ -615,6 +653,35 @@ find "$MNT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -exec touch -h -d "@$SOURCE_DAT
 # filesystem and is left out by --one-file-system. The bind mounts are gone, so nothing changes while reading.
 tar -C "$MNT" --one-file-system --exclude=./etc/ssl/certs/java/cacerts --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . |
   sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
+
+if [[ $VERITY -eq 1 ]]; then
+  echo "== dm-verity hash tree"
+  # Nothing may be written to the root after this point: the hash tree is made over its final bytes. The file system
+  # is unmounted cleanly first (no journal to replay when it is mounted read-only), and checked.
+  umount "$MNT"
+  e2fsck -fn "${LOOP}p4" >/dev/null
+  root_hash=$(veritysetup format --salt="$VERITY_SALT" --uuid="$VERITY_UUID" "${LOOP}p4" "${LOOP}p$HASH_PART" | awk '/^Root hash:/ {print $3}')
+  if [[ ! $root_hash =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: veritysetup gave no root hash" >&2
+    exit 1
+  fi
+  veritysetup verify "${LOOP}p4" "${LOOP}p$HASH_PART" "$root_hash"
+  # The hash goes to the EFI partition, next to the boot loader that passes it to the kernel (see ck.roothash above).
+  ESP_MNT=$(mktemp -d)
+  mount "${LOOP}p2" "$ESP_MNT"
+  for stub in "$ESP_MNT/EFI/BOOT/grub.cfg" "$ESP_MNT/boot/grub/grub.cfg"; do
+    [[ -f $stub ]] || {
+      echo "ERROR: $stub is missing, so the root hash has nowhere to go" >&2
+      exit 1
+    }
+    { printf 'set ck_roothash=%s\n' "$root_hash"; cat "$stub"; } >"$stub.new"
+    mv "$stub.new" "$stub"
+  done
+  umount "$ESP_MNT"
+  rmdir "$ESP_MNT"
+  printf '%s\n' "$root_hash" >"$OUT/keeper-os-$VERSION.roothash"
+  echo "root hash $root_hash"
+fi
 
 echo "== finish"
 cleanup

@@ -3,7 +3,7 @@
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
 #   MODE: uefi | secureboot | bios | all (default all). "all" runs the three boot modes one after another
 #   and exits non-zero if any of them fails.
-#   MODE layout: for an image built with --read-only-root. Boots UEFI, logs in as root and checks the memory layer over the
+#   MODE layout | verity: for an image built with --read-only-root (layout) or --verity (verity, UEFI only). Boots UEFI, logs in as root and checks the memory layer over the
 #   read-only root and the state partition. Needs --debug-login.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
@@ -48,7 +48,7 @@ trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$va
 args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
-if [[ $mode == checks || $mode == layout ]]; then
+if [[ $mode == checks || $mode == layout || $mode == verity ]]; then
   # A pipe lets this script type into the guest's serial console as well as read it.
   fifo=$(mktemp -u)
   mkfifo "$fifo.in" "$fifo.out"
@@ -60,7 +60,7 @@ if [[ $mode == checks || $mode == layout ]]; then
 fi
 
 case $mode in
-  uefi | checks | layout)
+  uefi | checks | layout | verity)
     cp "$ovmf_dir/OVMF_VARS_4M.fd" "$vars"
     args+=(-machine "q35,accel=$accel"
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.fd"
@@ -297,6 +297,15 @@ run_layout() {
     'echo L5_state_$(df --output=size -B1M /state | tail -1 | tr -d " ")_mb_fstab_root_$(grep -c " / " /etc/fstab)'
     'echo L_$((1+1))_DONE'
   )
+  if [[ $mode == verity ]]; then
+    # The root partition is a dm-verity device with the hash tree on CKVERITY, and the kernel was given the root hash.
+    # shellcheck disable=SC2016
+    cmds=(
+      'echo L6_verity_$(veritysetup status ckroot | awk "/type:/ {print \$2}")_$(veritysetup status ckroot | awk "/status:/ {print \$2}")_source_$(findmnt -no SOURCE /media/ck-ro)'
+      'echo L7_hashdev_$(lsblk -no PARTLABEL $(veritysetup status ckroot | awk "/hash device:/ {print \$3}"))_hashlen_$(grep -o "ck.roothash=[0-9a-f]*" /proc/cmdline | cut -d= -f2 | tr -d "[:space:]" | wc -c)'
+      "${cmds[@]}"
+    )
+  fi
   for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
   wait_for 'L_2_DONE' 120 || {
     echo "FAIL [layout]: the guest did not finish the checks" >&2
@@ -314,11 +323,15 @@ run_layout() {
   expect 'L3_var_CKSTATE:/var_home_CKSTATE:/home' '/var and /home come from the state partition'
   expect 'L4_write_ok_not_on_disk' 'a write to the system works and does not reach the root partition'
   expect 'L5_state_[0-9]*_mb_fstab_root_0' 'the state partition has room and fstab has no line for /'
+  if [[ $mode == verity ]]; then
+    expect 'L6_verity_VERITY_verified_source_/dev/mapper/ckroot' 'the root is a dm-verity device whose blocks verified'
+    expect 'L7_hashdev_CKVERITY_hashlen_64' 'the hash tree is on the CKVERITY partition and the kernel command line carries a 64 character root hash'
+  fi
   return "$failed"
 }
 
 for _ in $(seq 1 "$timeout_s"); do
-  if [[ $mode == layout ]] && grep -q 'login:' "$log"; then
+  if [[ $mode == layout || $mode == verity ]] && grep -q 'login:' "$log"; then
     rc=0
     run_layout || rc=1
     kill "$pid" 2>/dev/null || true
