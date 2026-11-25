@@ -71,6 +71,17 @@ class DebianImageProfileTests(unittest.TestCase):
         self.assertLess(lines.index("auth requisite pam_nologin.so"), reset_rule)
         self.assertGreater(lines.index("@include common-auth"), reset_rule)
 
+    def test_build_downloads_retry_and_time_out(self):
+        text = (BASE / "tools/build-image").read_text()
+        for opt in ('Acquire::Retries "8"', 'Acquire::http::Timeout "60"', 'Acquire::https::Timeout "60"'):
+            self.assertIn(opt, text)
+
+    def test_watchdog_reaches_pkill_when_a_diagnostic_fails(self):
+        text = (BASE / ".github/workflows/image-profiles.yml").read_text()
+        watchdog = text[text.index("sleep 1500"):text.index("sudo pkill -f tools/build-image")]
+        self.assertIn("set +e", text[text.index("sleep 1500") - 200:text.index("sleep 1500")])
+        self.assertNotIn("set -e", watchdog)
+
 
 if __name__ == "__main__":
     unittest.main()

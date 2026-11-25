@@ -1,14 +1,26 @@
 name: Image profile boot test
 
-# Builds a non-default image profile and boots it in UEFI, Secure Boot and BIOS. It never publishes:
-# no environment, no cloud sign-in, and the image carries the CI test key.
+# Builds each image profile and boots it in UEFI, Secure Boot and BIOS. The default (ubuntu) image is then
+# booted once more with the full checks suite (CK1 and up, tools/qemu-smoke checks), which is the only place
+# the checks run in CI. It never publishes: no environment, no cloud sign-in, and the image carries the CI test
+# key and an empty root password (--debug-login), so it must never leave the job.
+# The same paths run on pushes to develop, so a merge that breaks a check shows up there too.
 on:
   pull_request:
     paths:
       - '.github/workflows/image-profiles.yml'
-      - 'image/profiles/**'
+      - 'image/**'
       - 'tools/build-image'
       - 'tools/qemu-smoke'
+      - 'tools/ci-test-config-keys'
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/image-profiles.yml'
+      - 'image/**'
+      - 'tools/build-image'
+      - 'tools/qemu-smoke'
+      - 'tools/ci-test-config-keys'
   workflow_dispatch:
 
 permissions:
@@ -26,7 +38,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [debian, mint]
+        include:
+          # The Ubuntu archive snapshot server answers slowly to the runners at times (the package install of
+          # the image took over 20 minutes and never finished). A boot test does not need the pinned snapshot, so
+          # it takes the archive mirror the runners themselves use. The published image (keeper-image.yml) still
+          # builds from the snapshot.
+          - profile: ubuntu
+            checks: true
+            mirror: http://azure.archive.ubuntu.com/ubuntu
+          - profile: debian
+            checks: false
+            mirror: ''
+          - profile: mint
+            checks: false
+            mirror: http://azure.archive.ubuntu.com/ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -50,10 +75,31 @@ jobs:
       - name: Build the image
         run: |
           mkdir -p "$RUNNER_TEMP/image"
-          sudo tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
+          # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
+          # stuck package script or download shows up in the job log, then stop the job instead of waiting an hour.
+          (
+            set +e # the step runs with errexit and pipefail; a failed diagnostic must not skip the pkill below
+            sleep 1500
+            echo "::warning::the image build is still running after 25 minutes; process list follows"
+            ps -eo pid,ppid,etime,stat,wchan:24,args --forest | cut -c1-200
+            sudo ss -tinp 2>/dev/null | grep -A1 ':443' | head -30
+            # The file apt is fetching right now, and how much of it has arrived.
+            sudo find /tmp -path '*/var/cache/apt/archives/partial/*' -ls 2>/dev/null | head
+            sudo find /tmp -path '*/var/cache/apt/archives/*.deb' -newermt '-2 minutes' -ls 2>/dev/null | head
+            sudo pkill -f tools/build-image
+          ) &
+          watchdog=$!
+          sudo env CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console
+            --config-public-keys tools/ci-test-config-keys --serial-console --debug-login
+          kill "$watchdog"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: |
           image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
           sudo tools/qemu-smoke "$image" all 360
+      # The checks suite assumes the Ubuntu profile (Firefox pin, Xubuntu menu paths), so only that one runs it.
+      - name: Run the checks suite in QEMU
+        if: matrix.checks
+        run: |
+          image=$(ls "$RUNNER_TEMP"/image/keeper-os-*.img)
+          sudo tools/qemu-smoke "$image" checks 900
