@@ -39,6 +39,7 @@ mint_keyring_from_deb() {
     rm -rf "$dir"
     return 1
   fi
-  cp "$dir/usr/share/keyrings/linuxmint-keyring.gpg" "$out"
+  # The package ships the key ASCII-armored, but apt reads a .gpg file as binary only, so store it dearmored.
+  gpg --dearmor <"$dir/usr/share/keyrings/linuxmint-keyring.gpg" >"$out"
   rm -rf "$dir"
 }
