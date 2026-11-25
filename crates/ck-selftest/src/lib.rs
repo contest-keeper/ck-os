@@ -77,15 +77,23 @@ pub fn to_serial_block(report: &Report) -> String {
 #[must_use]
 pub fn find_report(text: &str) -> Option<Result<Report, serde_json::Error>> {
     let mut found = None;
-    let mut lines = text.lines().map(str::trim);
-    while let Some(line) = lines.next() {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let mut index = 0;
+    while index < lines.len() {
         // The serial port may put other text on the same line as the marker, so look inside it.
-        if !line.ends_with(BEGIN) {
+        if !lines[index].ends_with(BEGIN) {
+            index += 1;
             continue;
         }
-        let Some(json) = lines.next() else { break };
-        if lines.next().is_some_and(|end| end.ends_with(END)) {
-            found = Some(serde_json::from_str(json));
+        // A block cut short by a reboot has no end marker: the next line may be a new BEGIN,
+        // which must still be looked at.
+        let complete = lines.get(index + 2).is_some_and(|end| end.ends_with(END));
+        match lines.get(index + 1) {
+            Some(json) if complete => {
+                found = Some(serde_json::from_str(json));
+                index += 3;
+            }
+            _ => index += 1,
         }
     }
     found
@@ -143,5 +151,18 @@ mod tests {
 
         let broken = format!("{BEGIN}\n{{not json\n{END}\n");
         assert!(find_report(&broken).expect("a block").is_err());
+    }
+
+    #[test]
+    fn a_truncated_report_does_not_hide_the_next_one() {
+        let text = format!(
+            "{BEGIN}
+{}",
+            to_serial_block(&report())
+        );
+        assert_eq!(
+            find_report(&text).expect("a report").expect("valid"),
+            report()
+        );
     }
 }
