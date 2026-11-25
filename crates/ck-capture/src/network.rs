@@ -109,6 +109,8 @@ fn batches(entries: Vec<Value>) -> Vec<Vec<Value>> {
 pub struct Tail {
     path: PathBuf,
     offset: u64,
+    /// Where the last round started in the file it read, after any rotation was noticed.
+    round_start: u64,
     /// The identity of the log file, to see a rotation that left a longer file.
     #[cfg(unix)]
     inode: Option<u64>,
@@ -121,6 +123,7 @@ impl Tail {
         Self {
             path,
             offset,
+            round_start: offset,
             #[cfg(unix)]
             inode: None,
             since,
@@ -128,8 +131,8 @@ impl Tail {
     }
 
     /// Goes back to an earlier place, so a round that could not be queued at all is read again.
-    pub fn rewind(&mut self, offset: u64) {
-        self.offset = offset;
+    pub fn rewind(&mut self) {
+        self.offset = self.round_start;
     }
 
     pub fn offset(&self) -> u64 {
@@ -157,6 +160,7 @@ impl Tail {
         if meta.len() < self.offset {
             self.offset = 0;
         }
+        self.round_start = self.offset;
         file.seek(SeekFrom::Start(self.offset))?;
         let mut chunk = Vec::new();
         file.take(READ_PER_ROUND).read_to_end(&mut chunk)?;
@@ -197,7 +201,6 @@ pub fn follow(
         .unwrap_or(0);
     let mut tail = Tail::new(log.to_owned(), offset, since);
     loop {
-        let before = tail.offset();
         match tail.read_new() {
             Ok(entries) if entries.is_empty() => {}
             Ok(entries) => {
@@ -215,7 +218,7 @@ pub fn follow(
                 if failed && !sent_any {
                     // Nothing of the round was queued: read it again next time. After a partial
                     // success the rest is dropped, or the queued batches would be sent twice.
-                    tail.rewind(before);
+                    tail.rewind();
                 } else if let Err(error) = std::fs::write(state, tail.offset().to_string()) {
                     tracing::warn!("cannot remember how far the log was read: {error}");
                 }
