@@ -93,3 +93,16 @@ this image's systemd.
 - Real hardware (A.9) and a physical USB stick.
 - Anything that needs a contestant to log in, such as login detection (phase B).
 - CI: it needs the large image and virtualization, so it runs on a developer machine.
+
+## Image profiles and the protected image in CI (2026-11-25)
+
+`image-profiles.yml` builds each profile and boots it with KVM in QEMU: UEFI, Secure Boot and BIOS for the normal images (debian, mint),
+and UEFI only for the protected variants (see [protected-image.md](protected-image.md)).
+
+Not run, and not run by anyone yet:
+
+- Any boot on real hardware: UEFI, UEFI with Secure Boot, legacy BIOS, for Mint and for the protected image.
+- Shim with a MOK entry: the protected-image test puts the certificate in the firmware's db instead.
+- The signing key as a CI secret, and the published image built protected.
+- The checks suite (CK1 and up) in CI: it is wired to the Ubuntu job of `image-profiles.yml` in PR #121, which has not completed yet.
+- Fedora: no profile exists.
