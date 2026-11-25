@@ -37,8 +37,35 @@ pub fn load(root: &Root) -> Result<Loaded, Error> {
     load_from(root, &format!("{CONFIG_MOUNT_POINT}/{CONFIG_FILE}"), &keys)
 }
 
+/// The digest of a whole file whose first bytes are already in `head`, read on in small pieces so a huge
+/// file is never held in memory.
+fn whole_file_sha256(head: &[u8], rest: &mut File) -> Result<String, Error> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(head);
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let read = rest
+            .read(&mut chunk)
+            .map_err(|e| Error::io("reading the settings file", e))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&chunk[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        }))
+}
+
 fn load_from(root: &Root, path: &str, keys: &Keys) -> Result<Loaded, Error> {
-    let file = match File::open(root.path(path)) {
+    let mut file = match File::open(root.path(path)) {
         Ok(file) => file,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             return Err(Error::SettingsMissing(path.to_owned()));
@@ -46,7 +73,8 @@ fn load_from(root: &Root, path: &str, keys: &Keys) -> Result<Loaded, Error> {
         Err(e) => return Err(Error::io(format!("opening {path}"), e)),
     };
     let mut raw = Vec::new();
-    file.take(MAX_SETTINGS_BYTES + 1)
+    file.by_ref()
+        .take(MAX_SETTINGS_BYTES + 1)
         .read_to_end(&mut raw)
         .map_err(|e| Error::io(format!("reading {path}"), e))?;
     if raw.len() as u64 > MAX_SETTINGS_BYTES {
@@ -54,7 +82,7 @@ fn load_from(root: &Root, path: &str, keys: &Keys) -> Result<Loaded, Error> {
         // the last verified settings stay. Without one (a development build) it is a plain error.
         return Err(if matches!(keys, Keys::Trusted(_)) {
             Error::SettingsRejected {
-                sha256: ck_crypto::sha256_hex(&raw),
+                sha256: whole_file_sha256(&raw, &mut file)?,
                 reason: format!("the settings file is larger than {MAX_SETTINGS_BYTES} bytes"),
             }
         } else {

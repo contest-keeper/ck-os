@@ -281,9 +281,18 @@ fn a_settings_file_that_is_too_large_is_refused_and_reported() {
     stick.put_signed(&key, SETTINGS);
     stick.boot().expect("the first boot");
 
-    stick.put(&" ".repeat(1024 * 1024 + 1));
+    // Two files with the same first megabyte must not get the same reported digest.
+    let big = " ".repeat(1024 * 1024 + 4096);
+    stick.put(&big);
     let booted = stick.boot().expect("the last verified settings stay");
-    assert!(matches!(booted.trust, Trust::Rejected(_)));
+    let Trust::Rejected(first) = booted.trust else {
+        panic!("the file must be refused");
+    };
+    stick.put(&format!("{big}x"));
+    let Trust::Rejected(second) = stick.boot().expect("still the last verified").trust else {
+        panic!("the file must be refused");
+    };
+    assert_ne!(first, second);
     assert!(stick.marker().starts_with("rejected "));
     assert!(stick.allowlist().contains("example.org"));
 }
