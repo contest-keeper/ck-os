@@ -162,9 +162,16 @@ fn apply_config(root: &Root) -> ExitCode {
     // The stick id is not secret; the token and the file content are never logged.
     tracing::info!(stick = %loaded.config.stick_id, sha256 = %loaded.sha256, "settings read");
 
-    if let Err(error) = apply_basics(root, &loaded).and_then(|()| apply_branding(root, &loaded)) {
+    // A failing step must not skip the ones after it: the admin password, the hostname and the radio
+    // blocks do not depend on the files written before them. The exit code still says it failed.
+    let mut failed = false;
+    if let Err(error) = apply_basics(root, &loaded) {
         tracing::error!("applying the settings failed: {error}");
-        return ExitCode::FAILURE;
+        failed = true;
+    }
+    if let Err(error) = apply_branding(root, &loaded) {
+        tracing::error!("applying the branding failed: {error}");
+        failed = true;
     }
     if root.is_real_root() {
         set_running_hostname(&loaded.config.computer_name());
@@ -175,9 +182,11 @@ fn apply_config(root: &Root) -> ExitCode {
             apply_usb_storage_rules();
         }
         set_admin_password(loaded.config.settings.admin_password_hash.as_deref());
-        if loaded.config.settings.wifi.is_some() {
-            reload_network_connections();
-        }
+        // Also when the Wi-Fi was removed: the old connection file is gone and NetworkManager must forget it.
+        reload_network_connections();
+    }
+    if failed {
+        return ExitCode::FAILURE;
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS

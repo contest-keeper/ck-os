@@ -337,3 +337,15 @@ fn an_empty_or_cut_off_private_key_file_is_never_taken_as_the_token() {
         );
     }
 }
+
+#[test]
+fn a_failure_part_way_never_leaves_a_hash_for_settings_that_were_not_all_applied() {
+    let (dir, root) = stick(SETTINGS);
+    let loaded = load(&root).expect("valid settings");
+    // A folder where the allowlist belongs: replacing it with a file fails.
+    fs::create_dir_all(dir.path().join("etc/squid/acl_allowed_domains.txt")).expect("block it");
+
+    assert!(apply_basics(&root, &loaded).is_err());
+    assert!(!dir.path().join("etc/ck/config.sha256").exists());
+    assert!(!dir.path().join("etc/ck/config.json").exists());
+}
