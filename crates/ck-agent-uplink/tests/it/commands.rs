@@ -312,3 +312,20 @@ fn only_a_few_commands_of_one_reply_run() {
         .process_commands(&stick.queue, &many, now(), &executor);
     assert_eq!(ran, 10);
 }
+
+#[test]
+fn a_command_with_an_unknown_action_does_not_drop_the_others() {
+    let known = signed(command("c-lock", Action::LockScreen));
+    let unknown = serde_json::json!({
+        "command": {
+            "id": "c-new", "stick_id": "03c9f556",
+            "issued_at": "2026-11-18T10:00:00Z", "expires_at": "2026-11-18T10:30:00Z",
+            "action": { "type": "reboot_to_firmware" }
+        },
+        "signature": "00"
+    });
+    let body = serde_json::json!({ "commands": [unknown, known] }).to_string();
+    let dir = TempDir::new().expect("temp dir");
+    let reply = heartbeat_to(&hub_answering(&body), &dir);
+    assert_eq!(reply.commands, [known]);
+}

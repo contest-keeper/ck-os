@@ -256,10 +256,6 @@ fn apply_usb_storage_rules() {
         if !activated {
             break;
         }
-        // Without a running udev the later steps would only wait for events that never come.
-        if !activated {
-            break;
-        }
     }
     if activated {
         tracing::info!("USB storage blocked, except the stick itself");

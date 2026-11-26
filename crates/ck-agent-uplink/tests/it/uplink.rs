@@ -1021,3 +1021,28 @@ fn a_crash_between_the_state_and_the_event_leaves_a_gap_not_a_reused_number() {
     assert_eq!(files, [1, 3], "the first event is not overwritten");
     assert_eq!(next.seq, 2);
 }
+
+#[test]
+fn heartbeats_events_and_recordings_refuse_plain_http_to_another_machine() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://10.0.2.2:8088/");
+    recording_settings(dir.path(), "during_contest", None, None);
+    let pending = dir.path().join(PENDING);
+    fs::create_dir_all(&pending).expect("pending");
+    fs::write(pending.join("screen-1.mkv"), b"abcdefg").expect("video");
+    let mut uplink = Uplink::load(dir.path()).expect("load");
+    let heartbeat = uplink.next_heartbeat(time(), RecorderState::Waiting);
+    assert!(matches!(
+        uplink.send("http://10.0.2.2:8088/api/v1/heartbeat", &heartbeat),
+        Err(Error::InsecureAddress)
+    ));
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    push(&queue, &uplink, "ana");
+    assert!(matches!(
+        uplink.flush(&queue, "http://10.0.2.2:8088/api/v1/events"),
+        Err(Error::InsecureAddress)
+    ));
+    assert_eq!(queue.pending().expect("pending").len(), 1);
+    assert_eq!(uplink.upload_recordings().expect("no upload"), 0);
+    assert!(pending.join("screen-1.mkv").exists());
+}
