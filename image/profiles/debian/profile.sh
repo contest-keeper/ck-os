@@ -8,12 +8,15 @@ configure_debian_profile() {
   SNAPSHOT=${CK_SNAPSHOT:-20261119T000000Z}
   MIRROR=${CK_MIRROR:-https://snapshot.debian.org/archive/debian/$SNAPSHOT}
   local security_mirror=${CK_SECURITY_MIRROR:-https://snapshot.debian.org/archive/debian-security/$SNAPSHOT}
-  KERNEL_PACKAGES=linux-image-amd64
+  # Debian keeps hardware firmware apart from the kernel. Without it the screen or Wi-Fi of many computers does not start.
+  local firmware=firmware-amd-graphics,firmware-intel-graphics,firmware-nvidia-graphics,firmware-misc-nonfree
+  firmware+=,firmware-iwlwifi,firmware-realtek,firmware-atheros,firmware-brcm80211,firmware-mediatek
+  KERNEL_PACKAGES=linux-image-amd64,$firmware
   DESKTOP_PACKAGES=xfce4-session,xfce4-panel,xfce4-settings,xfce4-whiskermenu-plugin,xfdesktop4,xfwm4,thunar,lightdm,lightdm-gtk-greeter,xserver-xorg,xterm,dbus-user-session,fonts-dejavu-core
   APT_SOURCES=(
-    "deb $MIRROR $SUITE main"
-    "deb $MIRROR $SUITE-updates main"
-    "deb $security_mirror $SUITE-security main"
+    "deb $MIRROR $SUITE main non-free-firmware"
+    "deb $MIRROR $SUITE-updates main non-free-firmware"
+    "deb $security_mirror $SUITE-security main non-free-firmware"
   )
   APT_PROFILE_OPTIONS=(
     "--keyring=${CK_DEBIAN_KEYRING:-/usr/share/keyrings/debian-archive-keyring.gpg}"

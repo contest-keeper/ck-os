@@ -25,12 +25,17 @@ class DebianImageProfileTests(unittest.TestCase):
         )
         suite, kernel, desktop, *sources = output.splitlines()
         self.assertEqual(suite, "trixie")
-        self.assertEqual(kernel, "linux-image-amd64")
+        self.assertEqual(kernel.split(",")[0], "linux-image-amd64")
+        # Without these the desktop or Wi-Fi does not start on common hardware, and a VM boot test cannot show it.
+        for firmware in ("amd-graphics", "intel-graphics", "nvidia-graphics", "iwlwifi", "realtek"):
+            self.assertIn("firmware-" + firmware, kernel.split(","))
         self.assertIn("lightdm", desktop.split(","))
         self.assertIn("xfce4-whiskermenu-plugin", desktop.split(","))
         self.assertNotIn("xubuntu-core", desktop.split(","))
         self.assertEqual(len(sources), 3)
         self.assertIn("/archive/debian/", sources[0])
+        for source in sources:
+            self.assertTrue(source.endswith(" main non-free-firmware"), source)
         self.assertIn("trixie-updates main", sources[1])
         self.assertIn("/archive/debian-security/", sources[2])
         self.assertIn("trixie-security main", sources[2])
@@ -47,9 +52,9 @@ class DebianImageProfileTests(unittest.TestCase):
         self.assertEqual(
             output.splitlines(),
             [
-                "deb https://base.test/debian trixie main",
-                "deb https://base.test/debian trixie-updates main",
-                "deb https://security.test/debian-security trixie-security main",
+                "deb https://base.test/debian trixie main non-free-firmware",
+                "deb https://base.test/debian trixie-updates main non-free-firmware",
+                "deb https://security.test/debian-security trixie-security main non-free-firmware",
             ],
         )
 
