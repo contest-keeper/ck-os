@@ -114,6 +114,7 @@ MIRROR=${CK_MIRROR:-https://snapshot.ubuntu.com/ubuntu/$SNAPSHOT}
 KERNEL_PACKAGES=linux-image-generic
 DESKTOP_PACKAGES=xubuntu-core
 APT_PROFILE_OPTIONS=()
+APT_KEYRING= # empty: the build machine's own apt keys
 APT_SOURCES=(
   "deb $MIRROR $SUITE main universe"
   "deb $MIRROR $SUITE-updates main universe"
@@ -148,6 +149,9 @@ export SOURCE_DATE_EPOCH
 # shellcheck source=../image/patch/lib/image-tools.sh
 # shellcheck source-path=SCRIPTDIR
 source "$REPO/image/patch/lib/image-tools.sh"
+# shellcheck source=../image/lib/apt-cache.sh
+# shellcheck source-path=SCRIPTDIR
+source "$REPO/image/lib/apt-cache.sh"
 
 # Programs that Ubuntu does not give us as a usable package are downloaded as exact files, pinned by URL and
 # SHA-256, so the image does not change when a publisher releases a new version. To update one, change its URL
@@ -296,6 +300,7 @@ if [[ $PROFILE == mint ]]; then
   PROFILE_HOOKS=(--customize-hook="$mint_hook")
 fi
 mount "${LOOP}p2" "$MNT/boot/efi"
+verify_apt_cache "$APT_CACHE" "$APT_KEYRING" "${APT_SOURCES[@]}"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
 # answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that
