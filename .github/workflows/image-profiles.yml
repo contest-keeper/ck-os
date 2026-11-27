@@ -97,11 +97,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring \
             cryptsetup-bin systemd-ukify python3-pefile sbsigntool systemd-boot-efi python3-virt-firmware
+      - name: Set the download cache folder
+        run: echo "CK_CACHE=$RUNNER_TEMP/ck-os-build" >> "$GITHUB_ENV"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/ck-os-build
+          key: keeper-downloads-${{ matrix.profile }}-${{ hashFiles('tools/build-image', 'image/profiles/**') }}
+          restore-keys: keeper-downloads-${{ matrix.profile }}-
       - name: Build the image
         env:
           BUILD_ARGS: ${{ matrix.build }}
         run: |
-          mkdir -p "$RUNNER_TEMP/image"
+          mkdir -p "$RUNNER_TEMP/image" "$CK_CACHE"
           # A build that hangs gives no log. After 25 minutes (a build takes 5 to 15) print what is running, so the
           # stuck package script or download shows up in the job log, then stop the job instead of waiting an hour.
           (
@@ -127,10 +134,15 @@ jobs:
               args+=("$arg")
             fi
           done
-          sudo env CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
+          sudo env CK_CACHE="$CK_CACHE" CK_MIRROR="${{ matrix.mirror }}" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys tools/ci-test-config-keys --serial-console --debug-login "${args[@]}"
           kill "$watchdog"
+      - name: Make the download cache readable for saving
+        if: success()
+        run: |
+          sudo rm -rf "$CK_CACHE"/apt-*/partial "$CK_CACHE"/apt-*/lock
+          sudo chown -R "$USER" "$CK_CACHE"
       - name: Boot in QEMU
         env:
           MODES: ${{ matrix.modes }}
