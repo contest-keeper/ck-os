@@ -86,8 +86,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring
       # The packages and downloads of the build, kept between runs: the snapshot server is slow to the runners.
-      # build-image checks every download against its pinned hash or the signed package index, so a cached
-      # file cannot change an image.
+      # build-image checks the pinned downloads against their hash on every use. apt does not hash a cached .deb
+      # again (it compares name and size), so this cache is trusted: only this workflow may write it.
       - name: Set the download cache folder
         run: echo "CK_CACHE=$RUNNER_TEMP/ck-os-build" >> "$GITHUB_ENV"
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
