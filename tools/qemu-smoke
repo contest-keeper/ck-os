@@ -18,9 +18,27 @@ timeout_s=${3:-240}
 
 if [[ $mode == all ]]; then
   failed=0
-  for m in uefi secureboot bios; do
-    "$0" "$image" "$m" "$timeout_s" || failed=1
+  if [[ -n ${CK_SMOKE_LOG:-} ]]; then
+    for m in uefi secureboot bios; do
+      "$0" "$image" "$m" "$timeout_s" || failed=1
+    done
+    exit "$failed"
+  fi
+  # Each mode uses snapshot=on and its own temporary files, so all three boot in parallel.
+  smoke_dir=$(mktemp -d)
+  trap 'rm -rf "$smoke_dir"; kill $(jobs -p) 2>/dev/null || true' EXIT
+  pids=()
+  modes=(uefi secureboot bios)
+  for m in "${modes[@]}"; do
+    "$0" "$image" "$m" "$timeout_s" >"$smoke_dir/$m.log" 2>&1 &
+    pids+=($!)
   done
+  for i in "${!modes[@]}"; do
+    m=${modes[$i]}
+    if ! wait "${pids[$i]}"; then failed=1; fi
+    cat "$smoke_dir/$m.log"
+  done
+  rm -rf "$smoke_dir"
   exit "$failed"
 fi
 

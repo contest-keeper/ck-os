@@ -47,10 +47,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring
+      - name: Cache pinned downloads
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: ${{ runner.temp }}/ck-os-cache
+          key: ck-os-pinned-${{ hashFiles('tools/build-image') }}
+          restore-keys: ck-os-pinned-
       - name: Build the image
         run: |
-          mkdir -p "$RUNNER_TEMP/image"
-          sudo tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
+          mkdir -p "$RUNNER_TEMP/image" "$RUNNER_TEMP/ck-os-cache"
+          sudo CK_CACHE="$RUNNER_TEMP/ck-os-cache" tools/build-image --profile "${{ matrix.profile }}" --no-compress --out "$RUNNER_TEMP/image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys tools/ci-test-config-keys --serial-console
       - name: Boot UEFI, Secure Boot and BIOS in QEMU

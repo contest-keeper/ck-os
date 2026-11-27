@@ -56,7 +56,7 @@ jobs:
           version: 0.17.0
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
-          tool: cargo-zigbuild
+          tool: cargo-zigbuild,cargo-about
       - run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -65,9 +65,6 @@ jobs:
         run: |
           cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent
           file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
-      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
-        with:
-          tool: cargo-about
       - name: Check the agent's third-party licences
         run: |
           notices="$RUNNER_TEMP/THIRD-PARTY-LICENSES-ck-agent.txt"
@@ -78,12 +75,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
+      - name: Cache pinned downloads
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: ${{ runner.temp }}/ck-os-cache
+          key: ck-os-pinned-${{ hashFiles('tools/build-image') }}
+          restore-keys: ck-os-pinned-
       - name: Build the distribution image
+        env:
+          PUBLISH_ENABLED: ${{ vars.CK_IMAGE_PUBLISH_ENABLED }}
         run: |
-          mkdir -p "$RUNNER_TEMP/keeper-image"
-          sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+          mkdir -p "$RUNNER_TEMP/keeper-image" "$RUNNER_TEMP/ck-os-cache"
+          # Skip zstd -19 on the throwaway smoke image when a second build with real keys follows.
+          extra=()
+          if [[ "$PUBLISH_ENABLED" == true || -n "$RELEASE_TAG" ]]; then
+            extra+=(--no-compress)
+          fi
+          sudo CK_CACHE="$RUNNER_TEMP/ck-os-cache" tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console
+            --config-public-keys tools/ci-test-config-keys --serial-console "${extra[@]}"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
       # The smoke build above carries a CI test key, so it can never be published. A build that is
@@ -102,7 +112,7 @@ jobs:
             echo "::error::CK_CONFIG_PUBLIC_KEYS holds the CI test key"
             exit 1
           fi
-          sudo tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+          sudo CK_CACHE="$RUNNER_TEMP/ck-os-cache" tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
             --config-public-keys "$RUNNER_TEMP/config-public-keys"
       - name: Verify the packaged files and stage the Hub manifest

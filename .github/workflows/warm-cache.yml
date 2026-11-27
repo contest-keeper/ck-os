@@ -32,4 +32,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ck-os-agent
-      - run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p ck-agent
+      - run: cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent

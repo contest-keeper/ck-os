@@ -34,17 +34,14 @@ jobs:
           version: 0.17.0
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild
+          tool: cargo-zigbuild,cargo-about
       - run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ck-os-agent
-      - run: cargo zigbuild --release --target x86_64-unknown-linux-musl -p ck-agent
+      - run: cargo zigbuild --release --locked --target x86_64-unknown-linux-musl -p ck-agent
       - name: Check the agent is static
         run: file target/x86_64-unknown-linux-musl/release/ck-agent | grep -q "statically linked"
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-about
       - name: Write the third-party licences of the agent
         # Fails on a licence that is not allowed (about.toml) or on an empty result.
         run: |
