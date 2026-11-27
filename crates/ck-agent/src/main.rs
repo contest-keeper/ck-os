@@ -343,7 +343,10 @@ fn capture(
     follow_proxy_log(root, &events);
     match ck_capture::serve(
         &listener,
-        Box::new(ck_capture::Codeforces::new(observe)),
+        Box::new(ck_capture::Rules(vec![
+            Box::new(ck_capture::Codeforces::new(observe)),
+            Box::new(ck_capture::Vjudge::new()),
+        ])),
         sink,
         Box::new(Shared(events)),
         "CKCAP ",

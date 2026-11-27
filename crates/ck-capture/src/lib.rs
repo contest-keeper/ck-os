@@ -3,7 +3,7 @@
 //! It never changes traffic: every reply is "unchanged". What it learns goes to a [`Rule`].
 //! [`Observer`] writes the *shape* of the traffic (method, host, path, status, header names, form
 //! field names) and never a value. [`Codeforces`] tells the Hub who logged in and what was
-//! submitted, from public facts only. Either way a password, a cookie or a session id never leaves
+//! submitted, from public facts only; [`Vjudge`] does the same for `VJudge`. Either way a password, a cookie or a session id never leaves
 //! the memory of this process.
 
 mod codeforces;
@@ -14,12 +14,14 @@ mod icap;
 mod network;
 mod observe;
 mod server;
+mod vjudge;
 
 pub use codeforces::Codeforces;
 pub use http::{Head, parse_request_head, parse_response_head};
 pub use network::follow as follow_network;
 pub use observe::Observer;
 pub use server::serve;
+pub use vjudge::Vjudge;
 
 /// A request the proxy saw, reduced to what the rules need. The body is only its first part.
 pub struct Request {
@@ -64,6 +66,27 @@ pub trait Rule: Send {
     /// Called every few seconds, so a rule can tell what it still holds when no traffic comes.
     fn on_idle(&mut self) -> Vec<Output> {
         Vec::new()
+    }
+}
+
+/// Several rules on the same traffic, one per site: each ignores what is not its own.
+pub struct Rules(pub Vec<Box<dyn Rule>>);
+
+impl Rule for Rules {
+    fn on_request(&mut self, request: &Request) -> Vec<Output> {
+        self.0
+            .iter_mut()
+            .flat_map(|rule| rule.on_request(request))
+            .collect()
+    }
+    fn on_response(&mut self, request: &Head, response: &Response) -> Vec<Output> {
+        self.0
+            .iter_mut()
+            .flat_map(|rule| rule.on_response(request, response))
+            .collect()
+    }
+    fn on_idle(&mut self) -> Vec<Output> {
+        self.0.iter_mut().flat_map(|rule| rule.on_idle()).collect()
     }
 }
 
