@@ -68,7 +68,8 @@ vars=$(mktemp)
 usbdisk=$(mktemp)
 # CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
 # command in the guest (checks mode), for looking into a failure.
-trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
+# QEMU is waited for, so none is still running when this script returns; timeout -k below bounds that wait.
+trap 'kill $(jobs -p) 2>/dev/null || true; wait; [[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"' EXIT
 
 # The tamper mode boots a copy whose first root block is overwritten, so verity must refuse it. The copy is sparse.
 tampered=
@@ -153,7 +154,7 @@ case $mode in
     ;;
 esac
 
-timeout "$timeout_s" "$qemu" "${args[@]}" "${serial[@]}" &
+timeout -k 10 "$timeout_s" "$qemu" "${args[@]}" "${serial[@]}" &
 pid=$!
 
 # Waits up to $2 seconds for the text $1 in the serial log; returns 1 if it never comes.
