@@ -80,3 +80,23 @@ These keep Firefox's own connection to Codeforces. A Firefox extension was ruled
 2. **Firefox's TLS key log** (`SSLKEYLOGFILE`) with a root process that reads the traffic Firefox sends
    through Squid on `lo`. No remade connection, but the key log holds the TLS secrets of every session
    and is written by the contestant's own Firefox: heavy for a "never keep secrets" product.
+
+## VJudge (spike of 2026-11-27, from a browser HAR; values scrubbed)
+
+Recorded in a normal Chrome on a throwaway account, one contest submit. Everything is on `vjudge.net`
+(no other host is needed; the rest was analytics and ads). No Cloudflare challenge appeared.
+
+- **Submit**: `POST /contest/submit/{contest}/{problem}`, urlencoded form with `method`, `language`,
+  `open`, `source`, `accessCode`, `version`. The answer is JSON `{"runId": n}`, so the run id comes in
+  the submit's own answer. `accessCode` is secret-like: never read.
+- **After the submit** the page polls `POST /solution/data/{runId}`. The JSON names `author`, `authorId`,
+  `contestId`, `contestNum` (the problem), `status`, `statusCanonical` and `submitTime`, which is
+  VJudge's own clock in milliseconds (it matched the real submit time to the second).
+- **Contest data**: `GET /contest/rank/single/{contest}` and `GET /status/data?...` answer JSON to a client
+  with no cookies and no challenge (checked with `curl`), so the Hub can watch VJudge without credentials.
+  The rank list holds one row per participant's best submit, not every submit.
+- The rule is `ck-capture/src/vjudge.rs`. It tells the submit once the `solution/data` answer names the author
+  and time, or after a 10 s hold without them. The Hub compares `judge_time_ms` with the time VJudge lists.
+
+Not checked: whether Squid's re-made TLS connection is treated like the browser's, and how a body above the
+64 KiB preview behaves (the `source` field is in it).
