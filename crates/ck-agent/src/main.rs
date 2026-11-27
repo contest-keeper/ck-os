@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ck_agent_config::{
-    Error, Root, Trust, apply_basics, apply_branding, load_for_boot, write_trust,
+    Error, Root, Trust, apply_basics, apply_branding, bluetooth_unblock_needed,
+    finish_bluetooth_unblock, load_for_boot, write_trust,
 };
 use ck_agent_uplink::{Queue, Uplink, recorder_state};
 use clap::{Parser, Subcommand};
@@ -162,22 +163,41 @@ fn apply_config(root: &Root) -> ExitCode {
     // The stick id is not secret; the token and the file content are never logged.
     tracing::info!(stick = %loaded.config.stick_id, sha256 = %loaded.sha256, "settings read");
 
-    if let Err(error) = apply_basics(root, &loaded).and_then(|()| apply_branding(root, &loaded)) {
+    // A failing step must not skip the ones after it: the admin password, the hostname and the radio
+    // blocks do not depend on the files written before them. The exit code still says it failed.
+    let mut failed = false;
+    if let Err(error) = apply_basics(root, &loaded) {
         tracing::error!("applying the settings failed: {error}");
-        return ExitCode::FAILURE;
+        failed = true;
+    }
+    if let Err(error) = apply_branding(root, &loaded) {
+        tracing::error!("applying the branding failed: {error}");
+        failed = true;
     }
     if root.is_real_root() {
         set_running_hostname(&loaded.config.computer_name());
         if loaded.config.settings.block_bluetooth {
             block_bluetooth();
+        } else if bluetooth_unblock_needed(root) {
+            if unblock_bluetooth() {
+                if let Err(error) = finish_bluetooth_unblock(root) {
+                    tracing::error!("cannot note that Bluetooth is on again: {error}");
+                    failed = true;
+                }
+            } else {
+                // The note stays, so the next boot tries again.
+                failed = true;
+            }
         }
         if loaded.config.settings.block_usb_storage {
             apply_usb_storage_rules();
         }
         set_admin_password(loaded.config.settings.admin_password_hash.as_deref());
-        if loaded.config.settings.wifi.is_some() {
-            reload_network_connections();
-        }
+        // Also when the Wi-Fi was removed: the old connection file is gone and NetworkManager must forget it.
+        reload_network_connections();
+    }
+    if failed {
+        return ExitCode::FAILURE;
     }
     tracing::info!("settings applied");
     ExitCode::SUCCESS
@@ -191,13 +211,18 @@ fn record_trust(root: &Root, trust: &Trust) {
     }
 }
 
-/// Gives `ckadmin` the password the admin chose. Without a hash the account stays locked. A
-/// failure leaves it locked too (nobody can use sudo), so the rest of the settings still apply.
+/// Gives `ckadmin` the password the admin chose. Without a hash the account is locked, also when an
+/// earlier boot had set a password. A failed `chpasswd`
+/// leaves it locked (nobody can use sudo); a failed lock is logged, and the rest of the settings still apply.
 fn set_admin_password(hash: Option<&str>) {
-    match admin_account::set_password(std::path::Path::new("chpasswd"), hash) {
+    match admin_account::set_password(
+        std::path::Path::new("chpasswd"),
+        std::path::Path::new("passwd"),
+        hash,
+    ) {
         Ok(admin_account::Outcome::Set) => tracing::info!("admin password set"),
         Ok(admin_account::Outcome::Locked) => {
-            tracing::info!("no admin password in the settings; the admin account stays locked");
+            tracing::info!("no admin password in the settings; the admin account is locked");
         }
         Err(error) => {
             tracing::error!("cannot set the admin password, the account stays locked: {error}");
@@ -231,10 +256,6 @@ fn apply_usb_storage_rules() {
         if !activated {
             break;
         }
-        // Without a running udev the later steps would only wait for events that never come.
-        if !activated {
-            break;
-        }
     }
     if activated {
         tracing::info!("USB storage blocked, except the stick itself");
@@ -251,6 +272,28 @@ fn block_bluetooth() {
         Ok(status) if status.success() => tracing::info!("Bluetooth blocked"),
         Ok(status) => tracing::warn!("rfkill could not block Bluetooth ({status})"),
         Err(error) => tracing::warn!("cannot run rfkill, Bluetooth is not blocked: {error}"),
+    }
+}
+
+/// Switches Bluetooth on again when an earlier boot blocked it and the settings no longer ask for it.
+/// `true` when the radio is on again (or there is none to switch).
+fn unblock_bluetooth() -> bool {
+    match std::process::Command::new("rfkill")
+        .args(["unblock", "bluetooth"])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            tracing::info!("Bluetooth unblocked");
+            true
+        }
+        Ok(status) => {
+            tracing::warn!("rfkill could not unblock Bluetooth ({status})");
+            false
+        }
+        Err(error) => {
+            tracing::warn!("cannot run rfkill, Bluetooth stays as it is: {error}");
+            false
+        }
     }
 }
 
@@ -300,7 +343,10 @@ fn capture(
     follow_proxy_log(root, &events);
     match ck_capture::serve(
         &listener,
-        Box::new(ck_capture::Codeforces::new(observe)),
+        Box::new(ck_capture::Rules(vec![
+            Box::new(ck_capture::Codeforces::new(observe)),
+            Box::new(ck_capture::Vjudge::new()),
+        ])),
         sink,
         Box::new(Shared(events)),
         "CKCAP ",
@@ -375,27 +421,56 @@ impl ck_capture::EventSink for QueuedEvents {
     }
 }
 
-fn queued_events(root: &std::path::Path) -> std::sync::Arc<dyn ck_capture::EventSink> {
-    let queue = Queue::open(root.join(QUEUE_FOLDER));
-    match (Uplink::load(root), queue) {
-        (Ok(uplink), Ok(queue)) => {
-            let (stick, boot) = uplink.identity();
-            std::sync::Arc::new(QueuedEvents {
-                queue,
-                stick: stick.clone(),
-                boot: boot.to_owned(),
-                one_at_a_time: std::sync::Mutex::new(()),
-            })
+/// Opens the queue on the first event it can, and tries again on the next one while it cannot
+/// (settings may arrive after the capture service has started).
+struct LazyEvents {
+    root: PathBuf,
+    ready: std::sync::Mutex<Option<QueuedEvents>>,
+    warned: std::sync::atomic::AtomicBool,
+}
+
+impl LazyEvents {
+    fn open(&self) -> Result<QueuedEvents, String> {
+        let uplink = Uplink::load(&self.root).map_err(|e| e.to_string())?;
+        let queue = Queue::open(self.root.join(QUEUE_FOLDER)).map_err(|e| e.to_string())?;
+        let (stick, boot) = uplink.identity();
+        Ok(QueuedEvents {
+            queue,
+            stick: stick.clone(),
+            boot: boot.to_owned(),
+            one_at_a_time: std::sync::Mutex::new(()),
+        })
+    }
+}
+
+impl ck_capture::EventSink for LazyEvents {
+    fn send(&self, kind: ck_capture::EventKind, payload: serde_json::Value) -> Result<(), String> {
+        let mut ready = self.ready.lock().map_err(|e| e.to_string())?;
+        if ready.is_none() {
+            match self.open() {
+                Ok(events) => *ready = Some(events),
+                Err(error) => {
+                    // Say it once, not for every event.
+                    if !self.warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!("events cannot be queued yet, so they are dropped: {error}");
+                    }
+                    return Err(error);
+                }
+            }
         }
-        (uplink, queue) => {
-            tracing::warn!(
-                "events cannot be queued, so they are dropped ({:?}, {:?})",
-                uplink.err().map(|e| e.to_string()),
-                queue.err().map(|e| e.to_string())
-            );
-            std::sync::Arc::new(ck_capture::NoEvents)
+        match ready.as_ref() {
+            Some(events) => events.send(kind, payload),
+            None => Err("no queue".to_owned()),
         }
     }
+}
+
+fn queued_events(root: &std::path::Path) -> std::sync::Arc<dyn ck_capture::EventSink> {
+    std::sync::Arc::new(LazyEvents {
+        root: root.to_owned(),
+        ready: std::sync::Mutex::new(None),
+        warned: std::sync::atomic::AtomicBool::new(false),
+    })
 }
 
 fn self_test(

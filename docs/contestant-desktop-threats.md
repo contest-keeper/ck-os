@@ -5,7 +5,7 @@ what to block, how, and how we test it as `contestant`.
 
 | # | Threat | Block with | Test |
 |---|--------|-----------|------|
-| 1 | Terminal or shell (menu, `Ctrl+Alt+T`, file manager "open terminal", IDE embedded terminal) | Remove terminal packages/launchers, xfce kiosk files, drop shortcut bindings; IDE terminal off where the IDE allows | No launcher, shortcut does nothing, `xterm`/`xfce4-terminal` absent |
+| 1 | Terminal or shell (menu, `Ctrl+Alt+T`, file manager "open terminal", IDE embedded terminal) | Remove terminal packages/launchers, xfce kiosk files, drop shortcut bindings; IDE terminal off where the IDE allows | No launcher, shortcut does nothing, `xfce4-terminal` and `gnome-terminal` absent; `xterm` stays on purpose (the IDEs' Run starts it) but has no launcher, menu entry or shortcut |
 | 2 | Privilege escalation (`sudo`, `su`, `pkexec`, polkit prompts) | `contestant` not in `sudo`/`adm`; no sudoers entry except the reset helper; no polkit allow rules for it | `sudo -n true` and `pkexec true` fail |
 | 3 | Network bypass (own proxy, VPN, tethering, changing NetworkManager) | `ck-netlock` nftables fail-closed; polkit rule `54-ck-network.rules` denying every NetworkManager settings change (the panel `nm-applet` stays and only switches Wi-Fi and joins known networks); DNS stays pinned to the router by `resolv.conf` and the network lock; no `nmcli` permission | `nmcli connection add` denied; direct connect to a non-allowed IP fails |
 | 4 | Adding Wi-Fi | Same as 3 (#37); preset Wi-Fi comes from CKCONFIG, root-owned `0600` | Denied for contestant |

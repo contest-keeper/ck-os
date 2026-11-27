@@ -305,3 +305,143 @@ fn an_open_network_has_no_security_section_and_a_removed_network_removes_the_fil
         "the old network does not stay"
     );
 }
+
+#[test]
+fn an_empty_or_cut_off_private_key_file_is_never_taken_as_the_token() {
+    let (dir, root) = stick(SETTINGS);
+    let config_path = dir.path().join("ck-config");
+    fs::create_dir_all(&config_path).expect("ckconfig");
+    let enrolling = SETTINGS
+        .replace(r#""schema": 1"#, r#""schema": 3"#)
+        .replace(
+            r#""token": "the-secret""#,
+            r#""enrolment_code": "ABCD-EFGH-JKLM-NPQR-STUV""#,
+        );
+    fs::write(config_path.join("config.json"), &enrolling).expect("enrolment config");
+    load(&root).expect("first boot prepares the key");
+
+    let key = fs::read_dir(dir.path().join("var/lib/ck/enrolment"))
+        .expect("enrolment state")
+        .next()
+        .expect("one key")
+        .expect("entry")
+        .path();
+    for damaged in [
+        "", "
+", "abc",
+    ] {
+        fs::write(&key, damaged).expect("damage the key");
+        assert!(
+            load(&root).is_err(),
+            "{damaged:?} must not become the token"
+        );
+    }
+}
+
+#[test]
+fn a_failure_part_way_never_leaves_a_hash_for_settings_that_were_not_all_applied() {
+    let (dir, root) = stick(SETTINGS);
+    let loaded = load(&root).expect("valid settings");
+    // A folder where the allowlist belongs: replacing it with a file fails.
+    fs::create_dir_all(dir.path().join("etc/squid/acl_allowed_domains.txt")).expect("block it");
+
+    assert!(apply_basics(&root, &loaded).is_err());
+    assert!(!dir.path().join("etc/ck/config.sha256").exists());
+    assert!(!dir.path().join("etc/ck/config.json").exists());
+}
+
+#[test]
+fn a_site_list_taken_out_of_the_settings_goes_back_to_the_images_list() {
+    let (dir, root) = stick(SETTINGS);
+    let list = dir.path().join("etc/squid/acl_allowed_domains.txt");
+    fs::create_dir_all(list.parent().expect("parent")).expect("squid folder");
+    fs::write(
+        &list,
+        ".image.example
+",
+    )
+    .expect("the image's list");
+
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(
+        fs::read_to_string(&list)
+            .expect("list")
+            .contains(".example.org")
+    );
+
+    let without = SETTINGS.replace(
+        r#""allowed_domains": ["example.org", ".docs.example.org"],"#,
+        "",
+    );
+    fs::write(dir.path().join("ck-config/config.json"), without).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply again");
+    assert_eq!(
+        fs::read_to_string(&list).expect("list"),
+        ".image.example
+"
+    );
+}
+
+#[test]
+fn bluetooth_taken_out_of_the_settings_stays_pending_until_it_is_switched_on() {
+    use ck_agent_config::{
+        bluetooth_unblock_needed, bluetooth_unblock_pending, finish_bluetooth_unblock,
+    };
+
+    let blocked = SETTINGS.replace(
+        r#""site": "Lab 1","#,
+        r#""site": "Lab 1", "block_bluetooth": true,"#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(!bluetooth_unblock_pending(&root));
+    assert!(
+        !bluetooth_unblock_needed(&root)
+            || fs::read_to_string(dir.path().join("etc/ck/block-bluetooth")).is_ok()
+    );
+
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(bluetooth_unblock_pending(&root));
+    // A boot where rfkill failed leaves it pending; running apply again does not lose it.
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(bluetooth_unblock_pending(&root));
+
+    finish_bluetooth_unblock(&root).expect("done");
+    assert!(!bluetooth_unblock_pending(&root));
+}
+
+#[test]
+fn bluetooth_is_still_switched_on_when_the_file_writes_stopped_before_the_marker() {
+    use ck_agent_config::bluetooth_unblock_needed;
+
+    let blocked = SETTINGS.replace(
+        r#""site": "Lab 1","#,
+        r#""site": "Lab 1", "block_bluetooth": true,"#,
+    );
+    let (dir, root) = stick(&blocked);
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+
+    // The next settings no longer block it, but a file in the way stops apply_basics at the team file.
+    fs::write(dir.path().join("ck-config/config.json"), SETTINGS).expect("settings");
+    fs::remove_file(dir.path().join("etc/ck/team")).expect("the team file");
+    fs::create_dir_all(dir.path().join("etc/ck/team")).expect("block the team file");
+    assert!(apply_basics(&root, &load(&root).expect("valid settings")).is_err());
+    assert!(bluetooth_unblock_needed(&root));
+}
+
+#[test]
+fn a_site_list_the_image_never_had_is_removed_again_with_the_setting() {
+    let (dir, root) = stick(SETTINGS);
+    let list = dir.path().join("etc/squid/acl_allowed_domains.txt");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply");
+    assert!(list.exists());
+
+    let without = SETTINGS.replace(
+        r#""allowed_domains": ["example.org", ".docs.example.org"],"#,
+        "",
+    );
+    fs::write(dir.path().join("ck-config/config.json"), without).expect("settings");
+    apply_basics(&root, &load(&root).expect("valid settings")).expect("apply again");
+    assert!(!list.exists());
+}

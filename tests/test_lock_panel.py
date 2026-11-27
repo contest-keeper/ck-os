@@ -39,3 +39,31 @@ class LockPanelTest(unittest.TestCase):
         plugins = panel.findall("./property[@name='plugins']/property")
         self.assertEqual([plugin.get("name") for plugin in plugins], ["plugin-19"])
         self.assertIsNotNone(panel.find(".//value[@value='xfce4-web-browser.desktop']"))
+
+    def test_accepts_a_panel_without_any_launcher_to_remove(self):
+        # The Xubuntu panel has no terminal or finder launcher: nothing to remove is not an error.
+        script = Path(__file__).resolve().parents[1] / "image/keeper/lock-panel.py"
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "default.xml"
+            config.write_text('''<channel name="xfce4-panel"><property name="plugins">
+                <property name="plugin-17" value="launcher"><property name="items">
+                  <value value="xfce4-web-browser.desktop"/>
+                </property></property></property></channel>''', encoding="utf-8")
+            result = subprocess.run([sys.executable, script, config], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fails_when_a_renamed_terminal_launcher_stays_next_to_a_known_one(self):
+        # The application finder is removed, but the terminal launcher was renamed: the build must still stop.
+        script = Path(__file__).resolve().parents[1] / "image/keeper/lock-panel.py"
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "default.xml"
+            config.write_text('''<channel name="xfce4-panel"><property name="plugins">
+                <property name="plugin-17" value="launcher"><property name="items">
+                  <value value="xfce4-new-terminal.desktop"/>
+                </property></property>
+                <property name="plugin-20" value="launcher"><property name="items">
+                  <value value="xfce4-appfinder.desktop"/>
+                </property></property></property></channel>''', encoding="utf-8")
+            result = subprocess.run([sys.executable, script, config], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("xfce4-new-terminal.desktop", result.stderr)

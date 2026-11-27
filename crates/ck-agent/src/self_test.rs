@@ -38,14 +38,19 @@ pub fn oem_string_present(root: &Path, wanted: &str) -> bool {
             continue;
         }
         if let Ok(raw) = fs::read(entry.path().join("raw"))
-            && raw
-                .windows(wanted.len())
-                .any(|window| window == wanted.as_bytes())
+            && oem_strings(&raw).any(|string| string == wanted.as_bytes())
         {
             return true;
         }
     }
     false
+}
+
+/// The strings of a type 11 table: after the formatted part (its length is the second byte) come
+/// NUL separated strings. Whole strings are compared, so `ck-observe=10` is not `ck-observe=1`.
+fn oem_strings(raw: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let formatted = raw.get(1).map_or(raw.len(), |len| usize::from(*len));
+    raw.get(formatted..).unwrap_or_default().split(|b| *b == 0)
 }
 
 pub fn collect(root: &Path, unit_state: &dyn Fn(&str) -> UnitState) -> Report {
@@ -154,7 +159,25 @@ fn wifi_ssid(root: &Path) -> Option<String> {
     let text = fs::read_to_string(root.join(WIFI_CONNECTION)).ok()?;
     text.lines()
         .find_map(|line| line.strip_prefix("ssid="))
-        .map(str::to_owned)
+        .map(keyfile_unescape)
+}
+
+/// Undoes what the writer in ck-agent-config does: `\\` is a backslash, `\s` a space.
+fn keyfile_unescape(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('s') => out.push(' '),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 #[cfg(unix)]
@@ -289,5 +312,28 @@ mod tests {
 
         radio(dir.path(), "rfkill3", "bluetooth", "0", "0");
         assert_eq!(bluetooth_blocked(dir.path()), Some(false));
+    }
+
+    #[test]
+    fn oem_strings_match_whole_strings() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let entry = dir.path().join("sys/firmware/dmi/entries/11-0");
+        fs::create_dir_all(&entry).expect("folder");
+        // Type 11, length 5, handle, count 2, then the strings.
+        let mut raw = vec![11, 5, 0, 0, 2];
+        raw.extend_from_slice(b"ck-observe=10\0other\0\0");
+        fs::write(entry.join("raw"), raw).expect("raw");
+        assert!(!oem_string_present(dir.path(), "ck-observe=1"));
+        assert!(oem_string_present(dir.path(), "ck-observe=10"));
+        assert!(oem_string_present(dir.path(), "other"));
+    }
+
+    #[test]
+    fn ssid_is_read_unescaped() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let file = dir.path().join(WIFI_CONNECTION);
+        fs::create_dir_all(file.parent().expect("parent")).expect("folder");
+        fs::write(&file, "[wifi]\nssid=\\sa\\\\b\\s\n").expect("file");
+        assert_eq!(wifi_ssid(dir.path()).as_deref(), Some(" a\\b "));
     }
 }

@@ -1,7 +1,7 @@
 //! The `block_usb_storage` setting: USB mass-storage devices other than the stick itself are switched off.
 //!
 //! The stick boots from USB, so the `usb-storage` driver cannot be kept out of the system. Instead a udev
-//! rule de-authorises every mass-storage interface (class 08) except those of the USB device the root
+//! rule de-authorises every mass-storage interface (class 08, and class 06 so a phone in PTP mode cannot move files either) except those of the USB device the root
 //! filesystem lives on. The rule file is written from the signed settings only and is gone again when
 //! the setting is off.
 use std::fmt::Write as _;
@@ -55,7 +55,7 @@ fn is_usb_device_name(name: &str) -> bool {
 /// mass-storage interface is de-authorised when it appears.
 pub(crate) fn rules(keep: &[String]) -> String {
     let mut text = String::from("# Written at boot by ck-agent from the admin tool settings\n");
-    let storage = r#"ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceClass}=="08""#;
+    let storage = r#"ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceClass}=="06|08""#;
     for device in keep.iter().filter(|name| is_usb_device_name(name)) {
         let _ = writeln!(
             text,
@@ -87,7 +87,7 @@ pub fn usb_storage_blocked(root: &Root) -> Option<bool> {
             (found, all_blocked) = (true, false);
             continue;
         };
-        if class.trim() != "08" || keep.iter().any(|kept| kept == device) {
+        if !matches!(class.trim(), "06" | "08") || keep.iter().any(|kept| kept == device) {
             continue;
         }
         found = true;
@@ -97,4 +97,25 @@ pub fn usb_storage_blocked(root: &Root) -> Option<bool> {
         }
     }
     found.then_some(all_blocked)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rules;
+
+    #[test]
+    fn the_rule_switches_off_mass_storage_and_still_image_interfaces() {
+        let text = rules(&["1-2".to_owned()]);
+        // Class 0xff (MTP, but also network dongles) is left alone: blocking it would cut off Ethernet.
+        let blocking: Vec<&str> = text.lines().filter(|l| l.contains("authorized")).collect();
+        assert_eq!(blocking.len(), 1, "{text}");
+        assert!(
+            blocking[0].contains(r#"ATTR{bInterfaceClass}=="06|08""#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"KERNEL=="1-2:*", GOTO="ck_usb_storage_end""#),
+            "{text}"
+        );
+    }
 }

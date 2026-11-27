@@ -273,3 +273,37 @@ fn nothing_of_a_refused_first_boot_enrolment_file_reaches_the_system() {
     // No local key was made for the refused file.
     assert!(!stick.path("var/lib/ck/enrolment").exists());
 }
+
+#[test]
+fn a_settings_file_that_is_too_large_is_refused_and_reported() {
+    let key = ConfigSigningKey::generate();
+    let stick = Stick::new(&[&key]);
+    stick.put_signed(&key, SETTINGS);
+    stick.boot().expect("the first boot");
+
+    // Two files with the same first megabyte must not get the same reported digest.
+    let big = " ".repeat(1024 * 1024 + 4096);
+    stick.put(&big);
+    let booted = stick.boot().expect("the last verified settings stay");
+    let Trust::Rejected(first) = booted.trust else {
+        panic!("the file must be refused");
+    };
+    stick.put(&format!("{big}x"));
+    let Trust::Rejected(second) = stick.boot().expect("still the last verified").trust else {
+        panic!("the file must be refused");
+    };
+    assert_ne!(first, second);
+    assert!(stick.marker().starts_with("rejected "));
+    assert!(stick.allowlist().contains("example.org"));
+}
+
+#[test]
+fn a_damaged_copy_of_the_last_settings_is_no_last_good_instead_of_a_failure() {
+    let key = ConfigSigningKey::generate();
+    let stick = Stick::new(&[&key]);
+    stick.put_signed(&key, SETTINGS);
+    stick.boot().expect("the first boot");
+    fs::write(stick.path("etc/ck/config.json"), b"{ not json").expect("damage the copy");
+    stick.put(OTHER_STICK); // no longer matches its signature: refused, and the copy is no use either
+    assert!(rejected(&stick.boot()));
+}

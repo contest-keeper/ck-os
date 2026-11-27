@@ -7,12 +7,25 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import os
+import sys
 import tempfile
+import time
 
 
 INDEX = "images/images.json"
 MAX_IMAGES = 200
 MAX_INDEX_BYTES = 1024 * 1024
+# The newest image of a family and the one before it (for a rollback); older ones are deleted after a publish.
+KEEP_PER_FAMILY = 2
+# Images of different families are published at the same time and each rewrites the one index. A writer that
+# finds the index changed under it reads it again and retries (blobs already uploaded are skipped by checksum).
+INDEX_ATTEMPTS = 5
+INDEX_RETRY_SECONDS = float(os.environ.get("CK_PUBLISH_RETRY_SECONDS", "5"))
+
+
+class IndexChanged(ValueError):
+    """The stored index changed or appeared between reading it and writing it."""
 
 
 def sha256(path):
@@ -20,7 +33,29 @@ def sha256(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-def prepare(directory, version):
+def read_build_info(path):
+    """The build-image record of how the image was built: profile, debug login, serial console, settings keys."""
+    info = {}
+    for line in path.read_text().splitlines():
+        key, _, value = line.partition("=")
+        info[key] = value
+    return info
+
+
+def refuse_test_build(info):
+    """Never publish an image built for the QEMU test (empty root password, serial console, CI test key)."""
+    problems = []
+    if info.get("debug_login") != "0":
+        problems.append("it has an empty root password (--debug-login)")
+    if info.get("serial_console") != "0":
+        problems.append("it has a serial console and a GRUB menu (--serial-console)")
+    if info.get("config_public_keys") != "supplied":
+        problems.append(f"its settings keys are {info.get('config_public_keys')!r}, not a supplied key list")
+    if problems:
+        raise ValueError("this is a test build and must not be published: " + "; ".join(problems))
+
+
+def prepare(directory, version, publishing=False):
     image_id = f"keeper-os-{version}"
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?", version):
         raise ValueError("expected a Keeper OS version such as 1.2.3 or 1.2.3-dev.42.1")
@@ -30,16 +65,22 @@ def prepare(directory, version):
     checksum = directory / f"{image.name}.sha256"
     packages = directory / f"{image_id}.packages.txt"
     offer = directory / "SOURCE-OFFER.txt"
-    for file in (image, checksum, packages, offer):
+    build = directory / f"{image_id}.build.txt"
+    for file in (image, checksum, packages, offer, build):
         if not file.is_file() or file.stat().st_size == 0:
             raise ValueError(f"missing or empty release file: {file}")
+    info = read_build_info(build)
+    if not re.fullmatch(r"[a-z]+", info.get("profile", "")):
+        raise ValueError(f"{build.name} does not name the image profile")
+    if publishing:
+        refuse_test_build(info)
     digest = sha256(image)
     if checksum.read_text().splitlines() != [f"{digest}  {image.name}"]:
         raise ValueError(f"checksum does not match {image.name}")
     entry = {
         "id": image_id, "name": "Keeper OS", "version": version, "filename": image.name,
         "blob": f"images/{image.name}", "size": image.stat().st_size, "sha256": digest,
-        "family": "ubuntu", "profile": "generic", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt",
+        "family": info["profile"], "profile": "generic", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt",
     }
     files = [
         (image, entry["blob"], "application/zstd", digest),
@@ -48,6 +89,22 @@ def prepare(directory, version):
         (offer, entry["source_offer"], "text/plain", sha256(offer)),
     ]
     return entry, files
+
+
+def prune(images):
+    """Splits the index (in publish order) into the newest KEEP_PER_FAMILY images of each family and the rest."""
+    kept, removed, count = [], [], {}
+    for image in reversed(images):
+        family = image.get("family")
+        count[family] = count.get(family, 0) + 1
+        (kept if count[family] <= KEEP_PER_FAMILY else removed).append(image)
+    kept.reverse()
+    return kept, removed
+
+
+def release_blobs(image):
+    return [image["blob"], f"images/{image['filename']}.sha256", f"images/{image['id']}.packages.txt",
+            image["source_offer"]]
 
 
 def publish(account, entry, files):
@@ -74,7 +131,10 @@ def publish(account, entry, files):
             if not etag:
                 raise ValueError("the stored image index has no ETag")
             condition = ("--if-match", etag)
-            blob("download", INDEX, "--file", str(index), "--no-progress", *condition, "-o", "none")
+            try:
+                blob("download", INDEX, "--file", str(index), "--no-progress", *condition, "-o", "none")
+            except subprocess.CalledProcessError as error:
+                raise IndexChanged(f"the image index changed while it was read: {error}") from error
             if index.stat().st_size > MAX_INDEX_BYTES:
                 raise ValueError("the stored image index exceeds the Hub's size limit")
             document = json.loads(index.read_text(encoding="utf-8"))
@@ -86,8 +146,10 @@ def publish(account, entry, files):
         matches = [image for image in images if image["id"] == entry["id"]]
         if matches and matches != [entry]:
             raise ValueError(f"image ID {entry['id']} is already listed with different details")
+        removed = []
         if not matches:
             images.append(entry)
+            images[:], removed = prune(images)
         if len(images) > MAX_IMAGES:
             raise ValueError("the image index exceeds the Hub's image count limit")
         data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode()
@@ -109,8 +171,20 @@ def publish(account, entry, files):
         if not matches:
             index.write_bytes(data)
             # A concurrent writer must never overwrite a newer image index.
-            blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
-                 "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+            try:
+                blob("upload", INDEX, "--file", str(index), "--content-type", "application/json",
+                     "--content-cache-control", "no-cache", "--overwrite", "true", *condition, "-o", "none")
+            except subprocess.CalledProcessError as error:
+                raise IndexChanged(f"the image index changed while it was written: {error}") from error
+        # The Hub no longer lists these, so deleting their files cannot break a download. A failed delete only
+        # leaves files behind, so it must not fail a publish that already went through.
+        for image in removed:
+            for name in release_blobs(image):
+                try:
+                    if exists(name):
+                        blob("delete", name, "--delete-snapshots", "include", "-o", "none")
+                except subprocess.CalledProcessError as error:
+                    print(f"warning: could not delete {name}: {error}", file=sys.stderr)
 
 
 def main():
@@ -120,9 +194,17 @@ def main():
     parser.add_argument("--account", help="Azure storage account; omit to print the staged manifest")
     args = parser.parse_args()
     try:
-        entry, files = prepare(args.directory, args.version)
+        entry, files = prepare(args.directory, args.version, publishing=bool(args.account))
         if args.account:
-            publish(args.account, entry, files)
+            for attempt in range(1, INDEX_ATTEMPTS + 1):
+                try:
+                    publish(args.account, entry, files)
+                    break
+                except IndexChanged as error:
+                    if attempt == INDEX_ATTEMPTS:
+                        raise
+                    print(f"{error}; trying again ({attempt}/{INDEX_ATTEMPTS})", file=sys.stderr)
+                    time.sleep(INDEX_RETRY_SECONDS)
         else:
             print(json.dumps({"images": [entry]}, indent=2))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

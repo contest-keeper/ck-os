@@ -85,9 +85,10 @@ fn read_limited(root: &Root, path: &str, limit: u64) -> Result<Option<Vec<u8>>, 
 
 /// Reads the key list of the image. A list that cannot be read as keys trusts nothing, so every
 /// settings file is refused: a damaged list must not turn the check off. A release build without a
-/// list is an error; only a development build (debug assertions on) takes settings unchecked.
+/// list is an error; only a build with the `unsigned-dev` feature takes settings unchecked (a build's
+/// debug-assertions flag says nothing about whether it is a release image).
 pub(crate) fn load_keys(root: &Root) -> Result<Keys, Error> {
-    load_keys_with(root, !cfg!(debug_assertions))
+    load_keys_with(root, !cfg!(feature = "unsigned-dev"))
 }
 
 fn load_keys_with(root: &Root, list_required: bool) -> Result<Keys, Error> {
@@ -160,7 +161,15 @@ pub fn load_last_good(root: &Root) -> Result<Option<Loaded>, Error> {
     let Some(raw) = read_limited(root, APPLIED_COPY, MAX_SETTINGS_BYTES)? else {
         return Ok(None);
     };
-    let config = crate::enrolment::resolve(root, &raw, false)?.0;
+    // A damaged copy or enrolment key file is "no last good", not a failure: the boot goes on with the
+    // image's defaults and says so, instead of stopping.
+    let config = match crate::enrolment::resolve(root, &raw, false) {
+        Ok((config, _)) => config,
+        Err(error) => {
+            tracing::error!("the last verified settings cannot be used ({error})");
+            return Ok(None);
+        }
+    };
     if !config.validate().is_empty() {
         return Ok(None);
     }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Keeper OS disk image from stock Ubuntu 24.04 (see docs/base-images.md).
-# Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3.
-# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE]
+# Needs root (loop devices, chroot) and: mmdebstrap, sfdisk, losetup, mkfs.vfat, mkfs.ext4, zstd, grub, python3
+# (and gpg and dpkg-deb for --profile mint).
+# Run in WSL2 or on a Linux CI runner:  sudo tools/build-image [--out DIR] [--size 8G] [--agent FILE] [--no-compress] [--debug-login] [--serial-console] [--config-public-keys FILE] [--profile ubuntu|debian|mint] [--read-only-root] [--verity [--uki-key KEY --uki-cert CERT]]
 # --agent is the static ck-agent (default dist/ck-agent, built by tools/build-agent.ps1 or CI).
 # Packages come from a dated snapshot of noble, noble-updates and noble-security (CK_SNAPSHOT), so the same
 # snapshot gives the same package set. SOURCE_DATE_EPOCH, partition and filesystem IDs are fixed too; see
@@ -14,6 +15,14 @@ ESP_GUID=6b8a1c10-0000-4c4b-8000-000000000002
 CFG_GUID=6b8a1c10-0000-4c4b-8000-000000000003
 ROOT_GUID=6b8a1c10-0000-4c4b-8000-000000000004
 ROOT_UUID=6b8a1c10-0000-4c4b-8000-0000000000a4
+STATE_GUID=6b8a1c10-0000-4c4b-8000-000000000005
+STATE_UUID=6b8a1c10-0000-4c4b-8000-0000000000a5
+STATE_HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b5
+VERITY_SALT=6b8a1c10000000004c4b8000000000b66b8a1c10000000004c4b8000000000b6 # fixed, so the same root gives the same root hash
+VERITY_UUID=6b8a1c10-0000-4c4b-8000-0000000000b6
+HASH_GUID=6b8a1c10-0000-4c4b-8000-000000000006
+HASH_SIZE=96MiB # a SHA-256 hash tree over 6 GiB of 4 KiB blocks needs about 49 MB
+ROOT_SIZE=6GiB # the fixed root partition of a --read-only-root image; the state partition takes the rest
 HASH_SEED=6b8a1c10-0000-4c4b-8000-0000000000b4
 ESP_SERIAL=6B8A0002
 CFG_SERIAL=6B8A0003
@@ -22,6 +31,10 @@ PROFILE=ubuntu
 SIZE=8G
 DEBUG_LOGIN=0
 SERIAL_CONSOLE=0
+READ_ONLY_ROOT=0
+VERITY=0
+UKI_KEY=
+UKI_CERT=
 COMPRESS=1
 CONFIG_PUBLIC_KEYS=""
 
@@ -52,9 +65,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;; # the image then only accepts stick settings the Hub signed with one of these keys
     --profile)
-      PROFILE=${2:?--profile requires ubuntu or debian}
+      PROFILE=${2:?--profile requires ubuntu, debian or mint}
       case $PROFILE in
-        ubuntu | debian) ;;
+        ubuntu | debian | mint) ;;
         *)
           echo "unknown image profile: $PROFILE" >&2
           exit 2
@@ -63,6 +76,23 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
 
+    --read-only-root)
+      READ_ONLY_ROOT=1
+      shift
+      ;; # root partition mounted read-only with a memory layer on top, and a CKSTATE partition for /var and /home
+    --verity)
+      VERITY=1
+      READ_ONLY_ROOT=1
+      shift
+      ;; # --read-only-root, and the root is opened through dm-verity with a root hash from the kernel command line (UEFI only)
+    --uki-key)
+      UKI_KEY=${2:?--uki-key requires the private key file}
+      shift 2
+      ;; # the key that signs the unified kernel image; it stays on the build machine and never goes into the image
+    --uki-cert)
+      UKI_CERT=${2:?--uki-cert requires the certificate file}
+      shift 2
+      ;;
     --serial-console)
       SERIAL_CONSOLE=1
       shift
@@ -91,6 +121,8 @@ APT_SOURCES=(
 )
 SOURCE_OFFER=$REPO/image/SOURCE-OFFER.txt.in
 UBUNTU_RELEASE_FIELD=UBUNTU_CODENAME=noble
+# The Ubuntu trademarked packages are removed on every profile that installs them (everything but Debian).
+PURGE_UBUNTU_BRANDING=1
 if [[ $PROFILE == debian ]]; then
   # shellcheck source=../image/profiles/debian/profile.sh
   # shellcheck source-path=SCRIPTDIR
@@ -99,6 +131,14 @@ if [[ $PROFILE == debian ]]; then
   VERSION=$VERSION-debian
   SOURCE_OFFER=$REPO/image/profiles/debian/SOURCE-OFFER.txt.in
   UBUNTU_RELEASE_FIELD=
+  PURGE_UBUNTU_BRANDING=0
+elif [[ $PROFILE == mint ]]; then
+  # shellcheck source=../image/profiles/mint/profile.sh
+  # shellcheck source-path=SCRIPTDIR
+  source "$REPO/image/profiles/mint/profile.sh"
+  configure_mint_profile
+  VERSION=$VERSION-mint
+  SOURCE_OFFER=$REPO/image/profiles/mint/SOURCE-OFFER.txt.in
 fi
 # Every timestamp in the image is clamped to the snapshot time unless the caller sets it.
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2} ${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}" +%s)}
@@ -124,9 +164,11 @@ FIREFOX_SHA256=b636aedd0152e039e245ab235454383c9350ce39de87e2af3550904dbae69eeb
 CODIUM_VERSION='1.143.17232'
 CODIUM_URL='https://github.com/VSCodium/vscodium/releases/download/1.143.17232/codium_1.143.17232_amd64.deb'
 CODIUM_SHA256=988330df203f4d2dbfb9ee0052a0356a27af7c0a2a7ff606424c531ae4a7b538
-CLANGD_VSIX_URL='https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/0.6.0/file/llvm-vs-code-extensions.vscode-clangd-0.6.0.vsix'
+CLANGD_VERSION=0.6.0
+CLANGD_VSIX_URL="https://open-vsx.org/api/llvm-vs-code-extensions/vscode-clangd/$CLANGD_VERSION/file/llvm-vs-code-extensions.vscode-clangd-$CLANGD_VERSION.vsix"
 CLANGD_VSIX_SHA256=32030694fa6c0ef438f4e4219f84677cd32f603c7faa4c71a283efc1f5b51751
-KOTLIN_URL='https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip'
+KOTLIN_VERSION=2.4.21
+KOTLIN_URL="https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
 KOTLIN_SHA256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
 CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
 
@@ -134,14 +176,32 @@ CACHE=${CK_CACHE:-${HOME:-/root}/.cache/ck-os-build}
 # and that Firefox trusts the CA. Contestants get none.
 EXTRA_PACKAGES=
 [[ $DEBUG_LOGIN -eq 1 ]] && EXTRA_PACKAGES=curl,libnss3-tools
+# veritysetup, for the initramfs hook and for the root hash checks of the verity image.
+[[ $VERITY -eq 1 ]] && EXTRA_PACKAGES=${EXTRA_PACKAGES:+$EXTRA_PACKAGES,}cryptsetup-bin
 
 if [[ $EUID -ne 0 ]]; then
   echo "run as root" >&2
   exit 1
 fi
+if [[ -n $UKI_KEY || -n $UKI_CERT ]]; then
+  # A signed boot image only means something around a verity root: it pins the root hash on the command line.
+  if [[ $VERITY -ne 1 || -z $UKI_KEY || -z $UKI_CERT || ! -r $UKI_KEY || ! -r $UKI_CERT ]]; then
+    echo "ERROR: --uki-key and --uki-cert (both readable files) go together with --verity" >&2
+    exit 2
+  fi
+  for tool in ukify sbsign sbverify; do
+    command -v "$tool" >/dev/null || {
+      echo "ERROR: $tool is needed to sign the boot image (packages systemd-ukify, python3-pefile, sbsigntool, systemd-boot-efi)" >&2
+      exit 1
+    }
+  done
+fi
 
 WORK=$(mktemp -d)
-mkdir -p "$OUT" "$CACHE"
+# The .deb files apt downloads are kept here between builds (mmdebstrap's documented cache hooks below), so a
+# second build, or a CI run with a restored cache, does not fetch them again from the slow snapshot server.
+APT_CACHE=$CACHE/apt-$PROFILE
+mkdir -p "$OUT" "$CACHE" "$APT_CACHE"
 # fetch_pinned URL SHA256 NAME: downloads once into the cache, checks the hash every time (a changed or damaged
 # file stops the build) and copies the file to $WORK/NAME, the fixed name mmdebstrap's hooks copy in.
 fetch_pinned() {
@@ -164,6 +224,8 @@ cleanup() {
   set +e
   rm -rf "$WORK"
   for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m" 2>/dev/null; done
+  [[ -n ${STATE_MNT:-} ]] && umount "$STATE_MNT" 2>/dev/null
+  [[ -n ${ESP_MNT:-} ]] && umount "$ESP_MNT" 2>/dev/null && rmdir "$ESP_MNT" 2>/dev/null
   umount "$MNT" 2>/dev/null
   [[ -n $LOOP ]] && losetup -d "$LOOP"
   rmdir "$MNT" 2>/dev/null
@@ -172,22 +234,48 @@ trap cleanup EXIT
 
 # The package list is recorded next to the image. With a custom CK_MIRROR the build is not pinned.
 echo "== partition $IMG ($SIZE)"
-rm -f "$IMG"
+# Everything an earlier build of this version left behind goes first: the build record is written before the archive, so
+# an interrupted rebuild must not leave a new record next to an old archive that tools/publish-image would then accept.
+rm -f "$IMG" "$IMG.zst" "$IMG.zst.sha256" "$OUT/keeper-os-$VERSION.build.txt" "$OUT/keeper-os-$VERSION.packages.txt" \
+  "$OUT/keeper-os-$VERSION.rootfs.sha256" "$OUT/SOURCE-OFFER.txt"
 truncate -s "$SIZE" "$IMG"
 # Keep the 128 MiB ESP directly before the 16 MiB CKCONFIG partition for Forge's thin image.
-sfdisk "$IMG" <<EOF
+# A --read-only-root image has a fixed-size root (never written after the build, so it can be checked and mounted
+# read-only) and a last partition CKSTATE that holds what must survive a reboot and grows to fill the stick.
+root_line="type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$ROOT_GUID"
+state_line=
+if [[ $READ_ONLY_ROOT -eq 1 ]]; then
+  root_line="size=$ROOT_SIZE, $root_line, name=CKROOT"
+  state_line="type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$STATE_GUID, name=CKSTATE"
+fi
+# The state partition is last so it can grow; the verity hash tree sits between it and the root.
+STATE_PART=5
+HASH_PART=
+if [[ $VERITY -eq 1 ]]; then
+  root_line="$root_line
+size=$HASH_SIZE, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$HASH_GUID, name=CKVERITY"
+  STATE_PART=6
+  HASH_PART=5
+fi
+{
+  cat <<EOF
 label: gpt
 label-id: $DISK_GUID
 size=1MiB, type=21686148-6449-6E6F-744E-656564454649, uuid=6b8a1c10-0000-4c4b-8000-000000000000
 size=128MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=$ESP_GUID
 size=16MiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=$CFG_GUID, name=CKCONFIG
-type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$ROOT_GUID
+$root_line
 EOF
+  [[ -z $state_line ]] || echo "$state_line"
+} | sfdisk "$IMG"
 LOOP=$(losetup --find --show --partscan "$IMG")
 mkfs.vfat -F 32 -n EFI -i "$ESP_SERIAL" "${LOOP}p2" >/dev/null
 mkfs.vfat -F 16 -n CKCONFIG -i "$CFG_SERIAL" "${LOOP}p3" >/dev/null
 # E2FSPROGS_FAKE_TIME fixes the creation time; hash_seed and the UUID are otherwise random.
 E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKROOT -U "$ROOT_UUID" -E hash_seed="$HASH_SEED" "${LOOP}p4"
+if [[ $READ_ONLY_ROOT -eq 1 ]]; then
+  E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mkfs.ext4 -q -L CKSTATE -U "$STATE_UUID" -E hash_seed="$STATE_HASH_SEED" "${LOOP}p$STATE_PART"
+fi
 
 echo "== mount and install base system"
 mount "${LOOP}p4" "$MNT"
@@ -196,12 +284,26 @@ fetch_pinned "$FIREFOX_URL" "$FIREFOX_SHA256" firefox.deb
 fetch_pinned "$CODIUM_URL" "$CODIUM_SHA256" codium.deb
 fetch_pinned "$CLANGD_VSIX_URL" "$CLANGD_VSIX_SHA256" clangd.vsix
 fetch_pinned "$KOTLIN_URL" "$KOTLIN_SHA256" kotlin.zip
+PROFILE_HOOKS=()
+if [[ $PROFILE == mint ]]; then
+  # The Mint repository is checked, used and taken out again inside the build (see image/profiles/mint/profile.sh).
+  fetch_pinned "$MINT_KEYRING_URL" "$MINT_KEYRING_SHA256" mint-keyring.deb
+  mint_keyring_from_deb "$WORK/mint-keyring.deb" "$WORK/linuxmint-keyring.gpg"
+  # mmdebstrap runs the hook text in a shell, so every value is quoted for it (a path with a space, a package list).
+  # shellcheck disable=SC2016 # the $1 is meant for the hook shell
+  printf -v mint_hook 'sh %q "$1" %q %q %q %q %q' "$REPO/image/profiles/mint/hook.sh" "$WORK/linuxmint-keyring.gpg" \
+    "$MINT_MIRROR" "$MINT_SUITE" "$MINT_COMPONENTS" "$MINT_PACKAGES"
+  PROFILE_HOOKS=(--customize-hook="$mint_hook")
+fi
 mount "${LOOP}p2" "$MNT/boot/efi"
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
-# answers 503 for a while, so apt retries each download.
+# answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that
+# stalls without an error (seen on CI runners, for 20 minutes) is otherwise never retried.
 # shellcheck disable=SC2016 # the hook scripts are expanded by mmdebstrap, not here
-mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' "${APT_PROFILE_OPTIONS[@]}" \
+mmdebstrap --skip=check/empty --skip=essential/unlink --variant=minbase --aptopt='Acquire::Retries "8"'   --aptopt='Acquire::http::Timeout "60"' --aptopt='Acquire::https::Timeout "60"' "${APT_PROFILE_OPTIONS[@]}" \
+  --setup-hook='mkdir -p "$1"/var/cache/apt/archives/' \
+  --setup-hook="sync-in $APT_CACHE /var/cache/apt/archives/" \
   --include=apt,systemd-sysv,$KERNEL_PACKAGES,initramfs-tools,grub-efi-amd64,grub-efi-amd64-signed,shim-signed,grub-pc-bin,nftables,systemd-timesyncd,cloud-guest-utils,e2fsprogs,dosfstools,network-manager,network-manager-gnome,sudo,locales,ca-certificates,$DESKTOP_PACKAGES,build-essential,openjdk-21-jdk,python3,unzip,clangd,zenity,libnotify-bin,codeblocks,geany,ffmpeg,squid-openssl,openssl,systemd-resolved${EXTRA_PACKAGES:+,$EXTRA_PACKAGES} \
   --customize-hook="copy-in $WORK/firefox.deb $WORK/codium.deb $WORK/clangd.vsix $WORK/kotlin.zip /tmp" \
   --customize-hook='chroot "$1" apt-get -y install /tmp/firefox.deb /tmp/codium.deb' \
@@ -209,6 +311,8 @@ mmdebstrap --skip=check/empty --variant=minbase --aptopt='Acquire::Retries "8"' 
   --customize-hook='for t in kotlinc kotlin kotlinc-jvm; do ln -sfn /opt/kotlinc/bin/$t "$1"/usr/local/bin/$t; done' \
   --customize-hook='ext="$1"/usr/share/codium/resources/app/extensions/llvm-vs-code-extensions.vscode-clangd; mkdir "$ext" && chroot "$1" unzip -q /tmp/clangd.vsix "extension/*" -d /tmp/clangd-x && cp -r "$1"/tmp/clangd-x/extension/. "$ext" && rm -rf "$1"/tmp/clangd-x' \
   --customize-hook='rm -f "$1"/tmp/firefox.deb "$1"/tmp/codium.deb "$1"/tmp/clangd.vsix "$1"/tmp/kotlin.zip' \
+  "${PROFILE_HOOKS[@]}" \
+  --customize-hook="sync-out /var/cache/apt/archives $APT_CACHE" \
   "$SUITE" "$MNT" "${APT_SOURCES[@]}"
 
 echo "== install the Keeper files"
@@ -234,9 +338,10 @@ install_payload() {
 install_payload "$REPO/image/patch/rootfs" patch
 # Files that exist only on Keeper OS: the Squid settings and the per-stick CA service.
 install_payload "$REPO/image/keeper/rootfs" keeper
-if [[ $PROFILE == debian ]]; then
-  cp -a "$MNT/etc/xdg/xdg-xubuntu/." "$MNT/etc/xdg/"
-fi
+# The contestant's session is the plain xfce session (50-ck.conf), which reads only /etc/xdg, not the xdg-xubuntu
+# directory that the xubuntu session adds in front. The restricted menu and shortcut files must therefore sit in
+# /etc/xdg itself, on every profile (CK60 compares them).
+cp -a "$MNT/etc/xdg/xdg-xubuntu/." "$MNT/etc/xdg/"
 printf 'keeper-os %s\n' "$VERSION" >"$MNT/etc/ck/image-version"
 # Forge reads this from the raw image before offering first-boot enrolment.
 if [[ -r $AGENT ]] && grep -aFq 'Supports Keeper OS enrolment schema 3.' "$AGENT"; then
@@ -282,17 +387,38 @@ LABEL=EFI /boot/efi vfat umask=0077 0 1
 /var/tmp /var/tmp none bind,nosuid,nodev 0 0
 PARTLABEL=CKCONFIG /ck-config vfat noauto,nofail,ro,uid=0,gid=0,umask=0077,nosuid,nodev,noexec,x-systemd.device-timeout=30s 0 0
 EOF
+GROW_MOUNT=/
+if [[ $READ_ONLY_ROOT -eq 1 ]]; then
+  # The root is mounted read-only by the initramfs and covered by a memory layer (image/protected/initramfs), so it
+  # has no line here: a line for / would make systemd remount the memory layer read-only. /var and /home are the
+  # only things that last, and they come from the state partition.
+  cat >"$MNT/etc/fstab" <<'EOF'
+LABEL=EFI /boot/efi vfat umask=0077 0 1
+LABEL=CKSTATE /state ext4 noatime,nosuid,nodev,errors=remount-ro 0 2
+/state/var /var none bind 0 0
+/state/home /home none bind,nosuid,nodev 0 0
+/tmp /tmp none bind,nosuid,nodev 0 0
+/var/tmp /var/tmp none bind,nosuid,nodev 0 0
+PARTLABEL=CKCONFIG /ck-config vfat noauto,nofail,ro,uid=0,gid=0,umask=0077,nosuid,nodev,noexec,x-systemd.device-timeout=30s 0 0
+EOF
+  mkdir -p "$MNT/state" "$MNT/media/ck-ro" "$MNT/media/ck-rw"
+  # A machine id made at every boot would leave a new journal folder in /var each time, so logs stay in memory.
+  mkdir -p "$MNT/etc/systemd/journald.conf.d"
+  printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=64M\n' >"$MNT/etc/systemd/journald.conf.d/10-ck.conf"
+  GROW_MOUNT=/state
+fi
 install -d -m 0700 "$MNT/ck-config"
 echo keeper-os >"$MNT/etc/hostname"
 
 # Grow the root partition to fill the disk at every boot; does nothing once it is full size.
-cat >"$MNT/usr/local/sbin/ck-grow-root" <<'EOF'
+# What it grows: the root partition, or on a --read-only-root image the state partition (the root is never written).
+cat >"$MNT/usr/local/sbin/ck-grow-root" <<EOF
 #!/bin/sh
-root=$(findmnt -no SOURCE /)
-disk=/dev/$(lsblk -no PKNAME "$root" | head -1)
-part=$(cat "/sys/class/block/$(basename "$root")/partition" 2>/dev/null)
-[ -b "$disk" ] && [ -n "$part" ] || exit 0
-if growpart "$disk" "$part"; then resize2fs "$root"; fi
+root=\$(findmnt -no SOURCE $GROW_MOUNT)
+disk=/dev/\$(lsblk -no PKNAME "\$root" | head -1)
+part=\$(cat "/sys/class/block/\$(basename "\$root")/partition" 2>/dev/null)
+[ -b "\$disk" ] && [ -n "\$part" ] || exit 0
+if growpart "\$disk" "\$part"; then resize2fs "\$root"; fi
 exit 0
 EOF
 chmod 0755 "$MNT/usr/local/sbin/ck-grow-root"
@@ -314,9 +440,16 @@ EOF
 # at boot). Only the --serial-console build used by the QEMU smoke test has them, so the test can see the login
 # prompt.
 mkdir -p "$MNT/etc/default/grub.d"
+ck_cmdline_extra=
+[[ $READ_ONLY_ROOT -eq 1 ]] && ck_cmdline_extra=" ck.overlay=1"
+# The root hash is not known yet and cannot be in the root it protects: grub.cfg gets a variable that the EFI
+# partition's stub sets (see the verity step below). root= comes last on the line, so it wins over GRUB's own.
+# panic=0 on every verity command line: when the root fails its check, initramfs-tools' panic() halts the machine. Without
+# panic= it opens a root shell on the console that needs no password, from which the raw partitions can be rewritten.
+[[ $VERITY -eq 1 ]] && ck_cmdline_extra="$ck_cmdline_extra ck.verity=1 ck.roothash=@ROOTHASH@ root=/dev/mapper/ckroot panic=0"
 if [[ $SERIAL_CONSOLE -eq 1 ]]; then
-  cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
-GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 lockdown=integrity"
+  cat >"$MNT/etc/default/grub.d/ck.cfg" <<EOF
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200 lockdown=integrity$ck_cmdline_extra"
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TIMEOUT=1
 GRUB_DISTRIBUTOR="Keeper OS"
@@ -324,8 +457,8 @@ GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
 EOF
 else
-  cat >"$MNT/etc/default/grub.d/ck.cfg" <<'EOF'
-GRUB_CMDLINE_LINUX="lockdown=integrity"
+  cat >"$MNT/etc/default/grub.d/ck.cfg" <<EOF
+GRUB_CMDLINE_LINUX="lockdown=integrity$ck_cmdline_extra"
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_TIMEOUT=0
 GRUB_TIMEOUT_STYLE=hidden
@@ -377,6 +510,31 @@ fi
 
 echo "== boot loader"
 for m in dev dev/pts proc sys run; do mount --bind "/$m" "$MNT/$m"; done
+if [[ $READ_ONLY_ROOT -eq 1 ]]; then
+  # The memory layer is put on the root by the initramfs, so the initramfs is made again with its script.
+  install -D -m 0755 "$REPO/image/protected/initramfs/hooks/ck-protected" "$MNT/etc/initramfs-tools/hooks/ck-protected"
+  install -D -m 0755 "$REPO/image/protected/initramfs/scripts/init-bottom/ck-overlay" "$MNT/etc/initramfs-tools/scripts/init-bottom/ck-overlay"
+  if [[ $VERITY -eq 1 ]]; then
+    install -D -m 0755 "$REPO/image/protected/initramfs/hooks/ck-verity" "$MNT/etc/initramfs-tools/hooks/ck-verity"
+    install -D -m 0755 "$REPO/image/protected/initramfs/scripts/local-top/ck-verity" "$MNT/etc/initramfs-tools/scripts/local-top/ck-verity"
+  fi
+  chroot "$MNT" update-initramfs -u -k all
+  # A guard: an initramfs without the memory layer script would boot with a read-only system and no error.
+  # shellcheck disable=SC2016 # the loop runs in the chroot
+  initrd_list=$(chroot "$MNT" sh -c 'for initrd in /boot/initrd.img-*; do lsinitramfs "$initrd"; done')
+  grep -q 'scripts/init-bottom/ck-overlay' <<<"$initrd_list" || {
+    echo "ERROR: the initramfs does not contain the ck-overlay script" >&2
+    exit 1
+  }
+  if [[ $VERITY -eq 1 ]]; then
+    for needed in scripts/local-top/ck-verity sbin/veritysetup; do
+      grep -q "$needed" <<<"$initrd_list" || {
+        echo "ERROR: the initramfs does not contain $needed" >&2
+        exit 1
+      }
+    done
+  fi
+fi
 
 echo "== remove Ubuntu branding, add the source offer"
 # Canonical lets only unmodified Ubuntu carry its trademarks (docs/licences.md), so the artwork and boot-screen
@@ -386,7 +544,7 @@ echo "== remove Ubuntu branding, add the source offer"
 # on removed artwork; nothing installs packages on a contest stick afterwards.
 BRANDING_PACKAGES=(xubuntu-core xubuntu-desktop-minimal xubuntu-artwork xubuntu-wallpapers ubuntu-mono
   plymouth-theme-ubuntu-text plymouth-theme-xubuntu-logo plymouth-theme-xubuntu-text)
-if [[ $PROFILE == ubuntu ]]; then
+if [[ $PURGE_UBUNTU_BRANDING -eq 1 ]]; then
   chroot "$MNT" dpkg --purge --force-depends "${BRANDING_PACKAGES[@]}"
 fi
 # Desktop lockdown (threat 1): no terminal program except xterm, which Code::Blocks and Geany start to run a
@@ -410,7 +568,7 @@ printf 'Keeper OS %s \\n \\l\n\n' "$VERSION" >"$MNT/etc/issue"
 printf 'Keeper OS %s\n' "$VERSION" >"$MNT/etc/issue.net"
 # The GPL source offer: next to the image (and in the CI upload) and inside the image.
 sed -e "s|@VERSION@|$VERSION|g" -e "s|@SNAPSHOT@|$SNAPSHOT|g" -e "s|@CODIUM_VERSION@|$CODIUM_VERSION|g" \
-  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
+  -e "s|@FIREFOX_VERSION@|$FIREFOX_VERSION|g" -e "s|@CLANGD_VERSION@|$CLANGD_VERSION|g"   -e "s|@KOTLIN_VERSION@|$KOTLIN_VERSION|g" -e "s|@MINT_PACKAGES@|${MINT_PACKAGES:-none}|g" "$SOURCE_OFFER" >"$OUT/SOURCE-OFFER.txt"
 install -m 0644 "$OUT/SOURCE-OFFER.txt" "$MNT/usr/share/doc/keeper-os/SOURCE-OFFER.txt"
 install -m 0644 "$REPO/LICENSE" "$MNT/usr/share/doc/keeper-os/copyright"
 # The two pinned downloads ship no copyright file in the Debian places, so give them one. VSCodium's own licence
@@ -445,9 +603,31 @@ if ! grep -q 'custom\.cfg' "$MNT/boot/grub/grub.cfg" || ! grep -q '^menuentry ' 
   exit 1
 fi
 sed -i '/^menuentry .*--unrestricted/!s/^menuentry /menuentry --unrestricted /' "$MNT/boot/grub/grub.cfg"
+if [[ $VERITY -eq 1 ]]; then
+  # The root hash is a GRUB variable set by the stub on the EFI partition; the single quotes keep ${ck_roothash} for GRUB.
+  # shellcheck disable=SC2016
+  sed -i 's/ck\.roothash=@ROOTHASH@/ck.roothash=${ck_roothash}/' "$MNT/boot/grub/grub.cfg"
+  # shellcheck disable=SC2016
+  if grep -q '@ROOTHASH@' "$MNT/boot/grub/grub.cfg" || ! grep -q 'ck\.roothash=\${ck_roothash}' "$MNT/boot/grub/grub.cfg"; then
+    echo "ERROR: grub.cfg does not take the root hash from the EFI partition" >&2
+    exit 1
+  fi
+fi
 chmod 0600 "$MNT/boot/grub/grub.cfg"
 # shellcheck disable=SC2016 # dpkg-query expands these, not the shell
 chroot "$MNT" dpkg-query -W -f='${Package} ${Version}\n' >"$OUT/keeper-os-$VERSION.packages.txt"
+# What kind of build this is, for tools/publish-image: it refuses to publish a test build (empty root password,
+# serial console, CI test key) and reads the family from here. The settings key list is "test" when it holds the
+# CI test key, "supplied" when it holds other keys (the build cannot know the Hub's keys; the release workflow checks that the list is set and is not the test key) and "none" when the image has no list.
+config_keys="none"
+if [[ -n $CONFIG_PUBLIC_KEYS ]]; then
+  config_keys="supplied"
+  if grep -qF -f <(grep -vE '^[[:space:]]*(#|$)' "$REPO/tools/ci-test-config-keys") "$CONFIG_PUBLIC_KEYS"; then
+    config_keys="test"
+  fi
+fi
+printf 'profile=%s\ndebug_login=%s\nserial_console=%s\nconfig_public_keys=%s\nread_only_root=%s\nverity=%s\nsigned_uki=%s\n' \
+  "$PROFILE" "$DEBUG_LOGIN" "$SERIAL_CONSOLE" "$config_keys" "$READ_ONLY_ROOT" "$VERITY" "$([[ -n $UKI_KEY ]] && echo 1 || echo 0)" >"$OUT/keeper-os-$VERSION.build.txt"
 
 # The name resolver stub at 127.0.0.53 answers anyone, so the network lock does not let it out; resolv.conf
 # names the router's servers directly and Squid asks them itself (see netlock.nft).
@@ -468,6 +648,10 @@ if grep -qE '^(gnome-terminal|xfce4-terminal) ' "$OUT/keeper-os-$VERSION.package
   ! grep -q '^xterm ' "$OUT/keeper-os-$VERSION.packages.txt" ||
   ! grep -q '^xfce4-session ' "$OUT/keeper-os-$VERSION.packages.txt" || ! grep -q '^lightdm ' "$OUT/keeper-os-$VERSION.packages.txt"; then
   echo "ERROR: desktop lockdown: a terminal program is installed besides xterm, or the desktop itself is gone" >&2
+  exit 1
+fi
+if [[ $READ_ONLY_ROOT -eq 1 ]] && ! grep -q 'ck.overlay=1' "$MNT/boot/grub/grub.cfg"; then
+  echo "ERROR: a --read-only-root image must boot with ck.overlay=1" >&2
   exit 1
 fi
 if ! grep -q 'lockdown=integrity' "$MNT/boot/grub/grub.cfg"; then
@@ -502,6 +686,31 @@ fi
 
 echo "== make the root filesystem reproducible"
 for m in dev/pts dev proc sys run boot/efi; do umount "$MNT/$m"; done
+if [[ -n $UKI_KEY ]]; then
+  # The kernel, the initramfs and the os-release text are final now. They are copied out for the signed boot image.
+  mkdir -p "$WORK/uki"
+  uki_kernel=$(find "$MNT/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+  uki_uname=${uki_kernel##*/vmlinuz-}
+  uki_initrd="$MNT/boot/initrd.img-$uki_uname"
+  [[ -f $uki_kernel && -f $uki_initrd ]] || {
+    echo "ERROR: no kernel and initramfs pair in /boot for the signed boot image" >&2
+    exit 1
+  }
+  cp "$uki_kernel" "$WORK/uki/vmlinuz"
+  cp "$uki_initrd" "$WORK/uki/initrd.img"
+  cp "$MNT/usr/lib/os-release" "$WORK/uki/os-release"
+fi
+if [[ $READ_ONLY_ROOT -eq 1 ]]; then
+  # /var and /home move to the state partition: the bind mounts in fstab show them from there, and what stays in the
+  # read-only root under the same names is never seen.
+  STATE_MNT=$(mktemp -d)
+  mount "${LOOP}p$STATE_PART" "$STATE_MNT"
+  cp -a "$MNT/var" "$STATE_MNT/var"
+  cp -a "$MNT/home" "$STATE_MNT/home"
+  umount "$STATE_MNT"
+  rmdir "$STATE_MNT"
+  STATE_MNT=
+fi
 # Files that hold build time, random or per-run data and are rebuilt by the system on first boot.
 # doc-base's index holds build times and changes on every build; doc-base rewrites it at the next package change.
 rm -f "$MNT/var/lib/doc-base/info/files.yml"
@@ -517,11 +726,56 @@ find "$MNT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -exec touch -h -d "@$SOURCE_DAT
 tar -C "$MNT" --one-file-system --exclude=./etc/ssl/certs/java/cacerts --format=posix --pax-option=delete=atime,delete=ctime --sort=name --numeric-owner --xattrs --mtime="@$SOURCE_DATE_EPOCH" -cf - . |
   sha256sum | cut -d' ' -f1 >"$OUT/keeper-os-$VERSION.rootfs.sha256"
 
+if [[ $VERITY -eq 1 ]]; then
+  echo "== dm-verity hash tree"
+  # Nothing may be written to the root after this point: the hash tree is made over its final bytes. The file system
+  # is unmounted cleanly first (no journal to replay when it is mounted read-only), and checked.
+  umount "$MNT"
+  e2fsck -fn "${LOOP}p4" >/dev/null
+  root_hash=$(veritysetup format --salt="$VERITY_SALT" --uuid="$VERITY_UUID" "${LOOP}p4" "${LOOP}p$HASH_PART" | awk '/^Root hash:/ {print $3}')
+  if [[ ! $root_hash =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: veritysetup gave no root hash" >&2
+    exit 1
+  fi
+  veritysetup verify "${LOOP}p4" "${LOOP}p$HASH_PART" "$root_hash"
+  # The hash goes to the EFI partition, next to the boot loader that passes it to the kernel (see ck.roothash above).
+  ESP_MNT=$(mktemp -d)
+  mount "${LOOP}p2" "$ESP_MNT"
+  for stub in "$ESP_MNT/EFI/BOOT/grub.cfg" "$ESP_MNT/boot/grub/grub.cfg"; do
+    [[ -f $stub ]] || {
+      echo "ERROR: $stub is missing, so the root hash has nowhere to go" >&2
+      exit 1
+    }
+    # Only an exported variable reaches the grub.cfg that the stub loads with configfile.
+    { printf 'set ck_roothash=%s\nexport ck_roothash\n' "$root_hash"; cat "$stub"; } >"$stub.new"
+    mv "$stub.new" "$stub"
+  done
+  if [[ -n $UKI_KEY ]]; then
+    # Kernel, initramfs and the whole command line (with the root hash) in one file signed with our key. Shim starts
+    # grubx64.efi after BOOTX64.EFI, so the signed image takes the place of GRUB and the firmware's db or the
+    # laptop's MOK list (the organizer enrols the certificate once) decides whether it may run.
+    uki_cmdline="root=/dev/mapper/ckroot ro ck.overlay=1 ck.verity=1 ck.roothash=$root_hash lockdown=integrity panic=0"
+    [[ $SERIAL_CONSOLE -eq 1 ]] && uki_cmdline="$uki_cmdline console=tty0 console=ttyS0,115200"
+    ukify build --linux="$WORK/uki/vmlinuz" --initrd="$WORK/uki/initrd.img" --cmdline="$uki_cmdline" \
+      --os-release="@$WORK/uki/os-release" --uname="$uki_uname" \
+      --secureboot-private-key="$UKI_KEY" --secureboot-certificate="$UKI_CERT" --output="$WORK/uki/ck.efi"
+    sbverify --cert "$UKI_CERT" "$WORK/uki/ck.efi"
+    install -m 0644 "$WORK/uki/ck.efi" "$ESP_MNT/EFI/BOOT/grubx64.efi"
+    # The public certificate, for the organizer's MOK enrolment (docs/protected-image.md).
+    openssl x509 -in "$UKI_CERT" -outform DER -out "$OUT/keeper-os-$VERSION.uki-cert.der"
+  fi
+  umount "$ESP_MNT"
+  rmdir "$ESP_MNT"
+  printf '%s\n' "$root_hash" >"$OUT/keeper-os-$VERSION.roothash"
+  echo "root hash $root_hash"
+fi
+
 echo "== finish"
 cleanup
 trap - EXIT
 if [[ $COMPRESS -eq 1 ]]; then
-  zstd -T0 -19 -f "$IMG" -o "$IMG.zst"
+  # Level 12 instead of 19: about a third of the time, a slightly larger download.
+  zstd -T0 -12 -f "$IMG" -o "$IMG.zst"
   (cd "$OUT" && sha256sum "$(basename "$IMG.zst")" >"$(basename "$IMG.zst").sha256")
   echo "built $IMG.zst"
 else

@@ -579,9 +579,78 @@ fn a_refusal_and_an_unreachable_hub_are_different_errors() {
 #[test]
 fn a_trailing_slash_in_the_server_address_is_not_doubled() {
     let dir = TempDir::new().expect("temp dir");
-    machine(dir.path(), "http://10.0.2.2:8088/");
+    machine(dir.path(), "https://hub.example.org/");
     let url = Uplink::load(dir.path()).expect("load").url().expect("url");
-    assert_eq!(url, "http://10.0.2.2:8088/api/v1/heartbeat");
+    assert_eq!(url, "https://hub.example.org/api/v1/heartbeat");
+}
+
+#[test]
+fn plain_http_to_another_machine_is_not_used() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://10.0.2.2:8088/");
+    let uplink = Uplink::load(dir.path()).expect("load");
+    assert!(uplink.url().is_none());
+    assert!(uplink.events_url().is_none());
+}
+
+#[test]
+fn refused_files_are_capped_and_the_newest_are_kept() {
+    let hub = fake_hub(vec![]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let folder = dir.path().join("queue");
+    let queue = Queue::open(&folder).expect("open");
+    for n in 2..250 {
+        fs::write(folder.join(format!("event-{n:012}.refused")), "{}").expect("old file");
+    }
+    let event = push(&queue, &uplink, "ana");
+    assert_eq!(event.seq, 1);
+    let (counter, _) = queue.pending().expect("pending").remove(0);
+    queue.set_aside(counter).expect("set aside");
+    // The cap is applied when the queue is read next.
+    queue.pending().expect("pending");
+    let refused = fs::read_dir(&folder)
+        .expect("read")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "refused"))
+        .count();
+    assert_eq!(refused, 200);
+    assert!(folder.join("event-000000000249.refused").exists());
+    assert!(!folder.join("event-000000000002.refused").exists());
+}
+
+#[test]
+fn an_event_the_hub_took_stays_on_the_stick_as_it_was_sent_and_old_copies_are_capped() {
+    let hub = fake_hub(vec![200]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let folder = dir.path().join("queue");
+    let queue = Queue::open(&folder).expect("open");
+    push(&queue, &uplink, "ana");
+    let (counter, _) = queue.pending().expect("pending").remove(0);
+    let before = fs::read(folder.join(format!("event-{counter:012}.json"))).expect("file");
+
+    let url = uplink.events_url().expect("url");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 1);
+    assert_eq!(queue.pending().expect("pending").len(), 0);
+    let copy = folder.join(format!("event-{counter:012}.sent"));
+    assert_eq!(fs::read(&copy).expect("the local copy"), before);
+
+    // Far more copies than the cap: the oldest go, the newest stay.
+    for n in 1_000_000..1_020_001_u64 {
+        fs::write(folder.join(format!("event-{n:012}.sent")), "{}").expect("old copy");
+    }
+    queue.pending().expect("pending");
+    let kept = fs::read_dir(&folder)
+        .expect("read")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "sent"))
+        .count();
+    assert_eq!(kept, 20_000);
+    assert!(!copy.exists());
+    assert!(folder.join("event-000001020000.sent").exists());
 }
 
 #[test]
@@ -801,6 +870,21 @@ fn an_answer_that_redirects_is_not_the_hubs_and_the_event_stays_queued() {
 }
 
 #[test]
+fn one_flush_sends_a_bounded_number_of_events() {
+    let hub = fake_hub(vec![200; 101]);
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), &hub.base);
+    let uplink = Uplink::load(dir.path()).expect("load");
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    for n in 0..101 {
+        push(&queue, &uplink, &format!("user{n}"));
+    }
+    let url = uplink.events_url().expect("url");
+    assert_eq!(uplink.flush(&queue, &url).expect("flush"), 100);
+    assert_eq!(queue.pending().expect("pending").len(), 1, "the rest waits");
+}
+
+#[test]
 fn an_event_the_hub_already_has_counts_as_sent_and_an_unreachable_hub_loses_nothing() {
     let hub = fake_hub(vec![409]);
     let dir = TempDir::new().expect("temp dir");
@@ -834,7 +918,7 @@ fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
     let queue_dir = dir.path().join("queue");
     let queue = Queue::open(&queue_dir).expect("open");
     push(&queue, &uplink, "ana");
-    fs::write(queue_dir.join("event-000000000002.json"), "{ not an event").expect("damage");
+    fs::write(queue_dir.join("event-000000000009.json"), "{ not an event").expect("damage");
     push(&queue, &uplink, "bob");
 
     let events = queue.pending().expect("pending");
@@ -843,7 +927,7 @@ fn a_damaged_file_is_set_aside_and_a_huge_payload_is_refused() {
         2,
         "the damaged file does not block the others"
     );
-    assert!(queue_dir.join("event-000000000002.bad").exists());
+    assert!(queue_dir.join("event-000000000009.bad").exists());
 
     let (stick, boot) = uplink.identity();
     let huge = json!({ "text": "x".repeat(20_000) });
@@ -936,4 +1020,29 @@ fn a_crash_between_the_state_and_the_event_leaves_a_gap_not_a_reused_number() {
         .collect();
     assert_eq!(files, [1, 3], "the first event is not overwritten");
     assert_eq!(next.seq, 2);
+}
+
+#[test]
+fn heartbeats_events_and_recordings_refuse_plain_http_to_another_machine() {
+    let dir = TempDir::new().expect("temp dir");
+    machine(dir.path(), "http://10.0.2.2:8088/");
+    recording_settings(dir.path(), "during_contest", None, None);
+    let pending = dir.path().join(PENDING);
+    fs::create_dir_all(&pending).expect("pending");
+    fs::write(pending.join("screen-1.mkv"), b"abcdefg").expect("video");
+    let mut uplink = Uplink::load(dir.path()).expect("load");
+    let heartbeat = uplink.next_heartbeat(time(), RecorderState::Waiting);
+    assert!(matches!(
+        uplink.send("http://10.0.2.2:8088/api/v1/heartbeat", &heartbeat),
+        Err(Error::InsecureAddress)
+    ));
+    let queue = Queue::open(dir.path().join("queue")).expect("open");
+    push(&queue, &uplink, "ana");
+    assert!(matches!(
+        uplink.flush(&queue, "http://10.0.2.2:8088/api/v1/events"),
+        Err(Error::InsecureAddress)
+    ));
+    assert_eq!(queue.pending().expect("pending").len(), 1);
+    assert_eq!(uplink.upload_recordings().expect("no upload"), 0);
+    assert!(pending.join("screen-1.mkv").exists());
 }

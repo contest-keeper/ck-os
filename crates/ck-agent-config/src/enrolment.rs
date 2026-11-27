@@ -8,6 +8,9 @@ use crate::{Error, Root, apply::write};
 
 const STATE: &str = "/var/lib/ck/enrolment";
 
+/// A generated stick token is far longer than this; anything shorter is damage.
+const MIN_KEY_CHARS: usize = 16;
+
 #[derive(Deserialize)]
 struct Schema {
     schema: u32,
@@ -61,7 +64,17 @@ pub(crate) fn resolve(
     let bootstrap: EnrolmentConfig = parse(raw)?;
     let fingerprint = ck_crypto::sha256_hex(raw);
     let key_path = root.path(&format!("{STATE}/{fingerprint}.key"));
-    let read_key = || fs::read_to_string(&key_path).map(Token::new);
+    let read_key = || {
+        let text = fs::read_to_string(&key_path)?;
+        // An empty or cut-off key file must not become the token.
+        if text.trim().len() < MIN_KEY_CHARS {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "the private enrolment key is empty or cut off",
+            ));
+        }
+        Ok(Token::new(text))
+    };
     let token = match read_key() {
         Err(error) if error.kind() == ErrorKind::NotFound && prepare_key => {
             let token = ck_crypto::generate_stick_token();
@@ -92,7 +105,18 @@ pub(crate) fn resolve(
 }
 
 fn parse<T: DeserializeOwned>(raw: &[u8]) -> Result<T, Error> {
-    serde_json::from_slice(raw).map_err(|error| Error::SettingsUnreadable(error.to_string()))
+    serde_json::from_slice(raw).map_err(|error| Error::SettingsUnreadable(describe(&error)))
+}
+
+/// Where and what kind of mistake, never the text of the error: serde repeats the offending value
+/// (`invalid type: string "..."`), and the file holds the stick's token.
+fn describe(error: &serde_json::Error) -> String {
+    format!(
+        "{:?} at line {} column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
 }
 
 fn save_first_key(path: &std::path::Path, token: &Token) -> std::io::Result<()> {
@@ -109,4 +133,18 @@ fn save_first_key(path: &std::path::Path, token: &Token) -> std::io::Result<()> 
     #[cfg(unix)]
     fs::File::open(folder)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_parse_error_never_repeats_a_value_of_the_file() {
+        let raw = br#"{"schema": "very-secret-token-value"}"#;
+        let error = parse::<Schema>(raw).err().expect("an error");
+        let text = error.to_string();
+        assert!(!text.contains("very-secret"), "{text}");
+        assert!(text.contains("line 1"), "{text}");
+    }
 }

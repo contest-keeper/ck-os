@@ -19,6 +19,27 @@ const SITE: &str = "/etc/ck/site";
 pub const WIFI_CONNECTION: &str = "/etc/NetworkManager/system-connections/ck-wifi.nmconnection";
 /// Exists while the settings ask for Bluetooth to be blocked. The self-test reads it back.
 pub const BLOCK_BLUETOOTH: &str = "/etc/ck/block-bluetooth";
+/// Exists from the boot that stops asking for Bluetooth to be blocked until `rfkill unblock` has worked, so a
+/// failed attempt is tried again at the next boot.
+const UNBLOCK_BLUETOOTH_PENDING: &str = "/etc/ck/unblock-bluetooth";
+
+/// Whether Bluetooth still has to be switched on again after an earlier boot blocked it.
+#[must_use]
+pub fn bluetooth_unblock_pending(root: &Root) -> bool {
+    root.path(UNBLOCK_BLUETOOTH_PENDING).exists()
+}
+
+/// Whether Bluetooth has to be switched on again at this boot: a note is pending, or an earlier boot's block
+/// marker is still there because this boot's file writes stopped before they reached it.
+#[must_use]
+pub fn bluetooth_unblock_needed(root: &Root) -> bool {
+    bluetooth_unblock_pending(root) || root.path(BLOCK_BLUETOOTH).exists()
+}
+
+/// Says that Bluetooth was switched on again, so the next boot does not try it once more.
+pub fn finish_bluetooth_unblock(root: &Root) -> Result<(), Error> {
+    remove(root, UNBLOCK_BLUETOOTH_PENDING)
+}
 const SQUID_ALLOWLIST: &str = "/etc/squid/acl_allowed_domains.txt";
 
 const GENERATED: &str = "# Written at boot by ck-agent from the admin tool settings\n";
@@ -28,17 +49,36 @@ const GENERATED: &str = "# Written at boot by ck-agent from the admin tool setti
 ///
 /// Each file is replaced on its own, so a crash part-way leaves a mix of old and new files. That is
 /// fine because the agent runs this at every boot and every step overwrites its file: the next
-/// run brings all of them in line.
+/// run brings all of them in line. The copy of the settings and its hash come last, so a failure
+/// part-way never reports settings as applied that are not.
 pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
     let settings = &loaded.config.settings;
 
-    write(root, CONFIG_COPY, &loaded.raw, 0o600)?;
-    write(
-        root,
-        CONFIG_HASH,
-        format!("{}\n", loaded.sha256).as_bytes(),
-        0o644,
-    )?;
+    // First, so the radio's marker is kept even when a later file write fails: the agent blocks or unblocks
+    // the radio at this boot whatever else went wrong, and the next boot has to know which.
+    if settings.block_bluetooth {
+        write(
+            root,
+            BLOCK_BLUETOOTH,
+            b"1
+",
+            0o644,
+        )?;
+        remove(root, UNBLOCK_BLUETOOTH_PENDING)?;
+    } else {
+        // The pending note goes down before the block marker goes, so a crash in between still unblocks.
+        if root.path(BLOCK_BLUETOOTH).exists() {
+            write(
+                root,
+                UNBLOCK_BLUETOOTH_PENDING,
+                b"1
+",
+                0o644,
+            )?;
+        }
+        remove(root, BLOCK_BLUETOOTH)?;
+    }
+
     write(
         root,
         TEAM,
@@ -57,18 +97,6 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
         recording_conf(&loaded.config).as_bytes(),
         0o644,
     )?;
-
-    if settings.block_bluetooth {
-        write(
-            root,
-            BLOCK_BLUETOOTH,
-            b"1
-",
-            0o644,
-        )?;
-    } else {
-        remove(root, BLOCK_BLUETOOTH)?;
-    }
 
     if settings.block_usb_storage {
         write(root, BLOCK_USB_STORAGE, b"1\n", 0o644)?;
@@ -90,10 +118,23 @@ pub fn apply_basics(root: &Root, loaded: &Loaded) -> Result<(), Error> {
 
     // No sites chosen: keep the image's own list rather than block everything.
     if let Some(list) = allowlist(settings) {
+        keep_image_copy(root, SQUID_ALLOWLIST)?;
         write(root, SQUID_ALLOWLIST, list.as_bytes(), 0o644)?;
     } else {
-        tracing::warn!("no allowed sites in the settings; keeping the image's list");
+        // A list written for an earlier boot is replaced by the image's own, not kept.
+        tracing::warn!("no allowed sites in the settings; using the image's list");
+        restore_image_copy(root, SQUID_ALLOWLIST)?;
     }
+
+    // Last: the copy and its hash say "these settings are applied" (the self-test compares the hash, and a
+    // refused file falls back to the copy), so they must not move ahead of the files they describe.
+    write(root, CONFIG_COPY, &loaded.raw, 0o600)?;
+    write(
+        root,
+        CONFIG_HASH,
+        format!("{}\n", loaded.sha256).as_bytes(),
+        0o644,
+    )?;
     Ok(())
 }
 
@@ -143,6 +184,56 @@ fn keyfile_value(value: &str) -> String {
     out.push_str(core);
     out.push_str(&space.repeat(trailing));
     out
+}
+
+/// Where the image's own version of a file the settings can change is kept, the first time it is changed.
+fn image_copy_path(absolute: &str) -> String {
+    format!("{absolute}.ck-image")
+}
+
+/// Like `Path::exists`, but an error other than "not there" is reported instead of read as "not there".
+fn exists(root: &Root, absolute: &str) -> Result<bool, Error> {
+    root.path(absolute)
+        .try_exists()
+        .map_err(|e| Error::io(format!("checking {absolute}"), e))
+}
+
+fn image_absent_path(absolute: &str) -> String {
+    format!("{absolute}.ck-image-absent")
+}
+
+/// Keeps the image's own version of `absolute` before the settings first replace it, so a setting that
+/// is later taken away can bring it back. Only the first copy is kept: it is the image's, never ours.
+pub(crate) fn keep_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
+    let copy = image_copy_path(absolute);
+    let absent = image_absent_path(absolute);
+    if exists(root, &copy)? || exists(root, &absent)? {
+        return Ok(());
+    }
+    match fs::read(root.path(absolute)) {
+        Ok(original) => write(root, &copy, &original, 0o644),
+        // The image has no such file: say so, so that taking the setting away removes ours again.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(
+            root, &absent, b"absent
+", 0o644,
+        ),
+        Err(e) => Err(Error::io(format!("reading {absolute}"), e)),
+    }
+}
+
+/// Puts the image's own version of `absolute` back, when the settings changed it before. Nothing to do
+/// when they never did.
+pub(crate) fn restore_image_copy(root: &Root, absolute: &str) -> Result<(), Error> {
+    match fs::read(root.path(&image_copy_path(absolute))) {
+        Ok(original) => write(root, absolute, &original, 0o644),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if exists(root, &image_absent_path(absolute))? {
+                remove(root, absolute)?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(Error::io(format!("reading the image's {absolute}"), e)),
+    }
 }
 
 /// Removes a file written by an earlier boot. A file that is not there is fine.

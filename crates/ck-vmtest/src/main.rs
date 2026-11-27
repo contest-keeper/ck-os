@@ -80,6 +80,14 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
     }
     let config = read_config(&cli.image)?;
     fs::create_dir_all(&cli.out).map_err(|e| format!("creating {}: {e}", cli.out.display()))?;
+    // Results of an earlier run must not pass for this one.
+    for stale in ["report.json", "screenshot.png", "serial.log", "qemu.err"] {
+        match fs::remove_file(cli.out.join(stale)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("removing the old {stale}: {e}")),
+        }
+    }
     let work = tempfile::TempDir::new().map_err(|e| format!("creating a work folder: {e}"))?;
 
     let share = cli.qemu.parent().map(|dir| dir.join("share"));
@@ -108,6 +116,12 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
     let waited = started.elapsed().as_secs();
     let log = machine.serial_text();
     let _ = fs::write(cli.out.join("serial.log"), &log);
+    // The temporary folder goes away with this function: keep what QEMU said.
+    let errors = machine.error_text();
+    if !errors.is_empty() {
+        fs::write(cli.out.join("qemu.err"), &errors)
+            .map_err(|e| format!("writing qemu.err to {}: {e}", cli.out.display()))?;
+    }
 
     let problems = match outcome {
         Outcome::Report(report) => {
@@ -123,7 +137,10 @@ fn run(cli: &Cli, out: &mut impl Write) -> Result<bool, String> {
             check::problems(&config, &report)
         }
         Outcome::Unreadable(error) => vec![format!("the report cannot be read: {error}")],
-        Outcome::MachineStopped(status) => vec![format!("QEMU stopped by itself ({status})")],
+        // The test itself could not run, so this is not a failure of the image.
+        Outcome::MachineStopped(status) => {
+            return Err(format!("QEMU stopped by itself ({status}): {errors}"));
+        }
         Outcome::TimedOut => vec![format!("no report within {} s", cli.timeout)],
     };
 
@@ -158,7 +175,12 @@ fn wait_for_report(machine: &mut Machine, timeout: Duration) -> Outcome {
             None => {}
         }
         if let Some(status) = machine.exited() {
-            return Outcome::MachineStopped(status);
+            // The report may have been written between the read above and the exit.
+            return match ck_selftest::find_report(&machine.serial_text()) {
+                Some(Ok(report)) => Outcome::Report(Box::new(report)),
+                Some(Err(error)) => Outcome::Unreadable(error.to_string()),
+                None => Outcome::MachineStopped(status),
+            };
         }
         if Instant::now() >= deadline {
             return Outcome::TimedOut;

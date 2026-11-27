@@ -15,7 +15,7 @@ pub use recordings::RecordingError;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ck_agent_config::{PendingEnrolment, Root, read_applied_config};
 use ck_protocol::{
@@ -28,6 +28,10 @@ const CONFIG_COPY: &str = "etc/ck/config.json";
 /// Where events go. The Hub answers 409 for one it already has, which counts as sent.
 pub const EVENTS_PATH: &str = "/api/v1/events";
 /// Where the last heartbeat sequence is kept, in the folder systemd makes writable for the uplink.
+/// Events sent in one `flush`: each one is a request with its own connection.
+const MAX_PER_FLUSH: usize = 100;
+/// Time after which a flush stops starting new requests.
+const FLUSH_BUDGET: Duration = Duration::from_secs(20);
 const SEQUENCE_FILE: &str = "var/lib/ck/queue/heartbeat.json";
 /// The most the Hub may answer with. A few commands are a few kilobytes.
 const MAX_ANSWER_BYTES: u64 = 64 * 1024;
@@ -44,6 +48,8 @@ pub enum Error {
     Io(#[source] std::io::Error),
     #[error("the Hub did not accept the heartbeat: HTTP {0}")]
     Rejected(u16),
+    #[error("the Hub address must be https (or http to this machine); nothing was sent")]
+    InsecureAddress,
     #[error("cannot reach the Hub: {0}")]
     Unreachable(String),
     #[error("the event queue: {0}")]
@@ -115,7 +121,16 @@ impl Uplink {
 
     fn address(&self, path: &str) -> Option<String> {
         let base = self.config.settings.api.url.trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}{path}"))
+        if base.is_empty() {
+            return None;
+        }
+        let url = format!("{base}{path}");
+        // Events, recordings and heartbeats must not cross a network in plain text.
+        if !enrolment::permits_secret(&url) {
+            tracing::warn!("the Hub address must be https, so nothing is sent to it");
+            return None;
+        }
+        Some(url)
     }
 
     #[must_use]
@@ -174,10 +189,7 @@ impl Uplink {
         if answer.iter().all(u8::is_ascii_whitespace) {
             return Ok(HeartbeatReply::default());
         }
-        Ok(serde_json::from_slice(&answer).unwrap_or_else(|error| {
-            tracing::warn!("the Hub's answer to the heartbeat is not a reply: {error}");
-            HeartbeatReply::default()
-        }))
+        Ok(parse_reply(&answer))
     }
 
     /// The address events go to, or `None` when the admin set no server.
@@ -193,18 +205,29 @@ impl Uplink {
         (&self.config.stick_id, &self.boot_id)
     }
 
-    /// Sends the waiting events in order, taking each out of the queue once the Hub has it, and
+    /// Sends the waiting events in order, keeping each as a `.sent` copy once the Hub has it, and
     /// stops at the first one that does not get through so the order is kept. Returns how many
     /// were sent.
     ///
     /// A 409 means the Hub already has that event (its answer was lost earlier), so it counts as
     /// sent. A 400, 413 or 422 means it never will: the event is set aside as `.refused`. An error is returned only when nothing was sent; events not sent stay in the queue.
+    ///
+    /// At most `MAX_PER_FLUSH` events go in one call, so a long backlog does not hold up the
+    /// heartbeats and commands that share the loop; the next round sends the rest.
     pub fn flush(&self, queue: &Queue, url: &str) -> Result<usize, Error> {
         let mut sent = 0;
-        for (counter, event) in queue.pending()? {
+        let started = Instant::now();
+        for (attempts, (counter, event)) in
+            queue.pending()?.into_iter().take(MAX_PER_FLUSH).enumerate()
+        {
+            // Slow answers must not hold the loop for minutes either. The first request always
+            // runs; refusals count as attempts too.
+            if attempts > 0 && started.elapsed() >= FLUSH_BUDGET {
+                break;
+            }
             match self.post(url, &event.canonical_bytes()) {
                 Ok(_) | Err(Error::Rejected(409)) => {
-                    queue.remove(counter)?;
+                    queue.archive(counter)?;
                     sent += 1;
                 }
                 // The Hub will never take this one; keeping it would block every later event.
@@ -224,6 +247,10 @@ impl Uplink {
     /// Posts `body` signed with the stick's secret and returns the answer's body, at most
     /// `MAX_ANSWER_BYTES` of it.
     fn post(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
+        // Every send passes here, so a caller that skipped `address` still cannot use plain http.
+        if !enrolment::permits_secret(url) {
+            return Err(Error::InsecureAddress);
+        }
         if self.enrolment_pending()? {
             return Err(Error::EnrolmentPending);
         }
@@ -255,6 +282,57 @@ impl Uplink {
             Err(other) => Err(Error::Unreachable(other.to_string())),
         }
     }
+}
+
+/// The commands of a heartbeat answer. A command this agent cannot read (an action it does not know,
+/// from a newer Hub) is skipped on its own: one such command must not drop the lock or message that
+/// comes with it in the same answer.
+fn parse_reply(answer: &[u8]) -> HeartbeatReply {
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        #[serde(default)]
+        commands: Vec<serde_json::Value>,
+    }
+    let raw: Raw = match serde_json::from_slice(answer) {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!("the Hub's answer to the heartbeat is not a reply: {error}");
+            return HeartbeatReply::default();
+        }
+    };
+    let commands = raw
+        .commands
+        .into_iter()
+        .filter_map(|value| {
+            let id = value["command"]["id"].as_str().unwrap_or("").to_owned();
+            serde_json::from_value(value)
+                .inspect_err(|error| {
+                    if first_skip(&id) {
+                        tracing::warn!(command = %id, "a command of the Hub is skipped: {error}");
+                    }
+                })
+                .ok()
+        })
+        .collect();
+    HeartbeatReply { commands }
+}
+
+/// Whether this is the first time a skipped command is seen, so the Hub resending it at every
+/// heartbeat logs it once. The list is small and forgets the oldest ids.
+fn first_skip(id: &str) -> bool {
+    const REMEMBERED: usize = 64;
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if seen.iter().any(|old| old == id) {
+        return false;
+    }
+    if seen.len() == REMEMBERED {
+        seen.remove(0);
+    }
+    seen.push(id.to_owned());
+    true
 }
 
 /// Where `ck-recorder` writes what it is doing: `waiting`, `recording` or `lowdisk`.
@@ -336,4 +414,21 @@ fn save_sequence(root: &Path, boot_id: &str, seq: u64) -> Result<(), Error> {
         &path,
         &serde_json::to_vec(&saved).expect("a sequence serializes"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_skip;
+
+    #[test]
+    fn a_skipped_command_is_reported_once_and_the_list_stays_small() {
+        assert!(first_skip("skip-a"));
+        assert!(!first_skip("skip-a"));
+        for n in 0..200 {
+            first_skip(&format!("flood-{n}"));
+        }
+        // The oldest id was forgotten, so it is reported again; the newest is still remembered.
+        assert!(first_skip("skip-a"));
+        assert!(!first_skip("flood-199"));
+    }
 }

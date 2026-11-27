@@ -49,8 +49,11 @@ elif action == "upload":
     state_path.write_text(json.dumps(state))
     if name == os.environ.get("CK_TEST_FAIL_BLOB"):
         sys.exit("simulated upload failure")
-    if name == os.environ.get("CK_TEST_CHANGE_ETAG"):
-        blob["properties"]["etag"] = "concurrent-etag"
+    # Another writer replaces the index just before this upload: once, or on every attempt.
+    if name == os.environ.get("CK_TEST_CHANGE_ETAG") and (
+            not state.get("changed") or os.environ.get("CK_TEST_CHANGE_ETAG_EVERY")):
+        state["changed"] = True
+        blob["properties"]["etag"] = "concurrent-etag-" + str(len(state["calls"]))
         state_path.write_text(json.dumps(state))
     if "--if-none-match" in args:
         assert flag("--if-none-match") == "*" and blob is None
@@ -65,6 +68,8 @@ elif action == "upload":
         "metadata": metadata,
         "properties": {"etag": "etag-" + str(len(state["calls"]))},
     }
+elif action == "delete":
+    del blobs[name]
 else:
     sys.exit(f"unexpected Azure command: {action}")
 state_path.write_text(json.dumps(state))
@@ -85,17 +90,23 @@ class ImagePublishTests(unittest.TestCase):
         (self.files / f"{NAME}.sha256").write_text(f"{self.sha}  {NAME}\n")
         (self.files / "keeper-os-1.2.3.packages.txt").write_text("package 1\n")
         (self.files / "SOURCE-OFFER.txt").write_text("The written offer\n")
+        self.write_build_info()
         self.state = self.directory / "storage.json"
         self.state.write_text(json.dumps({"calls": [], "blobs": {}}))
         azure = self.directory / "az"
         azure.write_text(FAKE_AZ)
         azure.chmod(0o755)
 
+    def write_build_info(self, profile="ubuntu", debug_login="0", serial_console="0", config_public_keys="supplied"):
+        (self.files / "keeper-os-1.2.3.build.txt").write_text(
+            f"profile={profile}\ndebug_login={debug_login}\nserial_console={serial_console}\n"
+            f"config_public_keys={config_public_keys}\n")
+
     def run_publish(self, *args, **env):
         return subprocess.run(
             [sys.executable, PUBLISH, self.files, "1.2.3", *args],
             env=dict(os.environ, PATH=f"{self.directory}:{os.environ['PATH']}",
-                     CK_TEST_STATE=str(self.state), **env),
+                     CK_TEST_STATE=str(self.state), CK_PUBLISH_RETRY_SECONDS="0", **env),
             text=True, capture_output=True,
         )
 
@@ -133,6 +144,33 @@ class ImagePublishTests(unittest.TestCase):
         self.assertEqual(images[1]["sha256"], self.sha)
         self.assertIn(f'attachment; filename="{NAME}"', uploads[0][1])
 
+    def test_only_the_newest_two_images_of_each_family_stay(self):
+        def listed(family, version):
+            image_id = f"keeper-os-{version}"
+            return {"id": image_id, "version": version, "family": family, "filename": f"{image_id}.img.zst",
+                    "blob": f"images/{image_id}.img.zst", "source_offer": f"images/{image_id}.SOURCE-OFFER.txt"}
+
+        old = [listed("ubuntu", "1.2.0"), listed("debian", "1.2.0-debian"), listed("ubuntu", "1.2.1"),
+               listed("ubuntu", "1.2.2")]
+        blobs = {INDEX: {"data": json.dumps({"images": old}).encode().hex(), "properties": {"etag": "e"}}}
+        for image in old:
+            for name in (image["blob"], f"images/{image['filename']}.sha256", f"images/{image['id']}.packages.txt",
+                         image["source_offer"]):
+                blobs[name] = {"data": "", "metadata": {}, "properties": {"etag": "x"}}
+        self.state.write_text(json.dumps({"calls": [], "blobs": blobs}))
+        run = self.run_publish("--account", "cktest")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        state = self.storage()
+        index = json.loads(bytes.fromhex(state["blobs"][INDEX]["data"]))
+        self.assertEqual([image["id"] for image in index["images"]],
+                         ["keeper-os-1.2.0-debian", "keeper-os-1.2.2", "keeper-os-1.2.3"])
+        self.assertNotIn("images/keeper-os-1.2.0.img.zst", state["blobs"])
+        self.assertNotIn("images/keeper-os-1.2.1.SOURCE-OFFER.txt", state["blobs"])
+        self.assertIn("images/keeper-os-1.2.2.img.zst", state["blobs"])
+        self.assertIn("images/keeper-os-1.2.0-debian.img.zst", state["blobs"])
+        actions = [(action, name) for action, name, _ in state["calls"] if action in ("upload", "delete")]
+        self.assertLess(actions.index(("upload", INDEX)), actions.index(("delete", "images/keeper-os-1.2.0.img.zst")))
+
     def test_invalid_checksum_stops_before_contacting_storage(self):
         (self.files / NAME).write_bytes(b"a different archive")
         run = self.run_publish("--account", "cktest")
@@ -140,16 +178,28 @@ class ImagePublishTests(unittest.TestCase):
         self.assertIn("checksum", run.stderr)
         self.assertEqual(self.storage()["calls"], [])
 
-    def test_a_stale_manifest_writer_cannot_replace_the_existing_index(self):
+    def stored_index(self):
         old_data = json.dumps({"images": [{"id": "keeper-os-1.2.2"}]}).encode().hex()
         self.state.write_text(json.dumps({"calls": [], "blobs": {INDEX: {
             "data": old_data, "properties": {"etag": "previous-etag"},
         }}}))
-        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX)
+        return old_data
+
+    def test_a_stale_manifest_writer_cannot_replace_the_existing_index(self):
+        old_data = self.stored_index()
+        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX, CK_TEST_CHANGE_ETAG_EVERY="1")
         self.assertNotEqual(run.returncode, 0)
         index = self.storage()["blobs"][INDEX]
         self.assertEqual(index["data"], old_data)
-        self.assertEqual(index["properties"]["etag"], "concurrent-etag")
+        self.assertTrue(index["properties"]["etag"].startswith("concurrent-etag"))
+
+    def test_a_writer_that_lost_the_index_race_reads_it_again_and_publishes_on_top(self):
+        self.stored_index()
+        run = self.run_publish("--account", "cktest", CK_TEST_CHANGE_ETAG=INDEX)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        ids = [image["id"] for image in json.loads(bytes.fromhex(self.storage()["blobs"][INDEX]["data"]))["images"]]
+        self.assertEqual(ids, ["keeper-os-1.2.2", "keeper-os-1.2.3"])
+        self.assertEqual(sum(c[:2] == ["upload", f"images/{NAME}"] for c in self.storage()["calls"]), 1)
 
     def test_retry_after_interrupted_upload_publishes_only_a_complete_release(self):
         failed = self.run_publish("--account", "cktest",
@@ -161,3 +211,20 @@ class ImagePublishTests(unittest.TestCase):
         state = self.storage()
         self.assertIn(INDEX, state["blobs"])
         self.assertEqual(sum(c[:2] == ["upload", f"images/{NAME}"] for c in state["calls"]), 1)
+
+    def test_the_family_comes_from_the_profile_the_image_was_built_with(self):
+        self.write_build_info(profile="debian")
+        run = self.run_publish()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["images"][0]["family"], "debian")
+
+    def test_a_test_build_is_staged_but_never_published(self):
+        for field in ({"debug_login": "1"}, {"serial_console": "1"}, {"config_public_keys": "test"},
+                      {"config_public_keys": "none"}):
+            with self.subTest(field):
+                self.write_build_info(**field)
+                self.assertEqual(self.run_publish().returncode, 0)
+                run = self.run_publish("--account", "cktest")
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn("test build", run.stderr)
+                self.assertEqual(self.storage()["calls"], [])

@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # Boot a built image in QEMU and wait for the login prompt on the serial console.
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
-#   MODE: uefi | secureboot | bios | all (default all). "all" runs the three boot modes one after another
+#   MODE: uefi | secureboot | bios | all (default all) | checks. "all" runs the three boot modes one after another
 #   and exits non-zero if any of them fails.
+#   MODE layout | verity: for an image built with --read-only-root (layout) or --verity (verity, UEFI only). Boots UEFI, logs in as root and checks the memory layer over the
+#   read-only root and the state partition. Needs --debug-login.
+#   MODE signed | refused | tamper: for an image built with --verity and --uki-key (CK_UKI_CERT is its certificate, PEM).
+#     signed:  Secure Boot with the Microsoft keys and the certificate added to the firmware's db, as an organizer's MOK
+#              enrolment would do; must boot (shim, then the signed UKI), report "Secure boot enabled" and pass the
+#              verity checks of the verity mode.
+#     refused: Secure Boot without the certificate; must NOT reach the login prompt, because shim refuses the UKI.
+#     tamper:  a copy of the image with block 20 of /usr/lib/systemd/systemd in the root partition overwritten, booted like verity mode; must
+#              NOT reach the login prompt, and the log must show the verity or mount failure. Needs sfdisk. Not run: shim with the MOK list (see
+#              docs/protected-image.md); the test enrols the certificate in the firmware's db instead.
 #   MODE checks: boots UEFI, logs in as root on the serial console and checks the Keeper parts from inside
 #   (network lock, Squid, capture, allowlist, CA trust). Needs an image built with --debug-login, QEMU's
 #   user network and internet access (it fetches https://example.com through Squid). Linux only.
@@ -12,7 +22,7 @@
 # skipped Secure Boot cannot pass.
 set -euo pipefail
 
-image=${1:?usage: qemu-smoke IMAGE [uefi|secureboot|bios|all] [timeout]}
+image=${1:?usage: qemu-smoke IMAGE [uefi|secureboot|bios|all|checks] [timeout]}
 mode=${2:-all}
 timeout_s=${3:-240}
 
@@ -58,13 +68,32 @@ vars=$(mktemp)
 usbdisk=$(mktemp)
 # CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
 # command in the guest (checks mode), for looking into a failure.
-trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
+trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
+# The tamper mode boots a copy whose first root block is overwritten, so verity must refuse it. The copy is sparse.
+tampered=
+if [[ $mode == tamper ]]; then
+  tampered=$(mktemp)
+  cp --sparse=always "$image" "$tampered"
+  root_start=$(sfdisk -d "$tampered" | sed -n 's/.*start= *\([0-9]*\),.*name="CKROOT".*/\1/p')
+  [[ -n $root_start ]] || {
+    echo "FAIL [tamper]: the image has no partition named CKROOT (built without --read-only-root?)" >&2
+    exit 1
+  }
+  # The 20th block of systemd's own program file, in the root's 4 KiB blocks (the partition starts on a block boundary).
+  victim=$(debugfs -R "bmap /usr/lib/systemd/systemd 20" "$tampered?offset=$((root_start * 512))" 2>/dev/null | tail -1)
+  [[ $victim =~ ^[0-9]+$ && $victim -gt 0 ]] || {
+    echo "FAIL [tamper]: could not find a block of /usr/lib/systemd/systemd in the root (got '$victim')" >&2
+    exit 1
+  }
+  head -c 4096 /dev/zero | tr '\0' '\377' | dd of="$tampered" bs=4096 seek=$((root_start * 512 / 4096 + victim)) conv=notrunc status=none
+  image=$tampered
+fi
 # snapshot=on keeps the image unchanged, so the same file can be booted again or flashed.
 args=(-m 3072 -smp 2 -display none -drive "file=$image,format=raw,snapshot=on" -no-reboot)
 serial=(-serial "file:$log")
 fifo=
-if [[ $mode == checks ]]; then
+if [[ $mode == checks || $mode == layout || $mode == verity || $mode == signed ]]; then
   # A pipe lets this script type into the guest's serial console as well as read it.
   fifo=$(mktemp -u)
   mkfifo "$fifo.in" "$fifo.out"
@@ -76,10 +105,32 @@ if [[ $mode == checks ]]; then
 fi
 
 case $mode in
-  uefi | checks)
+  uefi | checks | layout | verity | tamper)
     cp "$ovmf_dir/OVMF_VARS_4M.fd" "$vars"
     args+=(-machine "q35,accel=$accel"
       -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.fd"
+      -drive "if=pflash,format=raw,file=$vars")
+    ;;
+  signed | refused)
+    # The same Secure Boot firmware as secureboot mode. For signed, the image's certificate joins the firmware's db
+    # (shim also accepts what db accepts), which is what an enrolled MOK entry gives a laptop.
+    if [[ $mode == signed ]]; then
+      command -v virt-fw-vars >/dev/null || {
+        echo "FAIL [signed]: virt-fw-vars (package virt-firmware) is needed to enrol the certificate" >&2
+        exit 1
+      }
+      [[ -r ${CK_UKI_CERT:-} ]] || {
+        echo "FAIL [signed]: set CK_UKI_CERT to the PEM certificate the image's boot image was signed with" >&2
+        exit 1
+      }
+      virt-fw-vars --input "$ovmf_dir/OVMF_VARS_4M.ms.fd" --output "$vars" --add-db 6b8a1c10-0000-4c4b-8000-0000000000c1 "$CK_UKI_CERT"
+    else
+      cp "$ovmf_dir/OVMF_VARS_4M.ms.fd" "$vars"
+    fi
+    # shellcheck disable=SC2054 # the commas belong to the -machine option string
+    args+=(-machine "q35,accel=$accel,smm=on"
+      -global driver=cfi.pflash01,property=secure,value=on
+      -drive "if=pflash,format=raw,readonly=on,file=$ovmf_dir/OVMF_CODE_4M.secboot.fd"
       -drive "if=pflash,format=raw,file=$vars")
     ;;
   secureboot)
@@ -157,10 +208,10 @@ run_checks() {
     'rm -f /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; a=$?; ck-reset-allow >/dev/null; PAM_USER=ckreset ck-screen pam; b=$?; touch -d "90 seconds ago" /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; d=$?; touch -d "5 minutes ago" /run/ck-reset-allowed; PAM_USER=ckreset ck-screen pam; c=$?; rm -f /run/ck-reset-allowed; echo CK50_resetlogin_${a}_${b}_${d}_$c'
     'echo CK51_lockdown_$(grep -c lockdown=integrity /proc/cmdline)_$(grep -o "\[[a-z]*\]" /sys/kernel/security/lockdown | tr -d "[]")'
     'timeout 3 bash -c "echo >/dev/tcp/10.0.2.2/9" 2>/dev/null; r=$?; echo CK52_rootnet_${r}_slices_$(for u in squid NetworkManager systemd-timesyncd ck-uplink; do systemctl show -p Slice --value $u.service; done | grep -cx cknet.slice)'
-    'echo CK53_hardened_$(for u in ck-uplink ck-config; do systemctl show -p LockPersonality -p RestrictNamespaces -p SystemCallArchitectures --value $u.service | grep -cE "yes|native"; done | tr "
-" "_")failed_$(systemctl is-failed ck-config.service ck-uplink.service | grep -c failed)'
+    'echo CK53_hardened_$(for u in ck-uplink ck-config ck-recording-upload; do systemctl show -p LockPersonality -p RestrictNamespaces -p SystemCallArchitectures --value $u.service | grep -cE "yes|native"; done | tr "
+" "_")failed_$(systemctl is-failed ck-config.service ck-uplink.service ck-recording-upload.service | grep -c failed)'
     'echo CK54_mounts_$(findmnt -no OPTIONS /tmp | grep nosuid | grep -c nodev)_$(findmnt -no OPTIONS /home | grep nosuid | grep -c nodev)_$(findmnt -no OPTIONS /tmp | grep -c noexec)_$(findmnt -no OPTIONS /var/tmp | grep nosuid | grep -c nodev)'
-    'echo "ACTION==\"add\", SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_interface\", ATTR{bInterfaceClass}==\"08\", ATTR{authorized}=\"0\"" >/etc/udev/rules.d/60-ck-smoke-usb.rules; udevadm control --reload; udevadm trigger --subsystem-match=usb --action=add; udevadm settle; n=0; a=; for i in /sys/bus/usb/devices/*:*; do [ "$(cat $i/bInterfaceClass 2>/dev/null)" = 08 ] && n=$((n+1)) && a="$a$(cat $i/authorized)"; done; rm -f /etc/udev/rules.d/60-ck-smoke-usb.rules; echo CK59_usbstorage_${n}_${a}'
+    'echo "ACTION==\"add\", SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_interface\", ATTR{bInterfaceClass}==\"06|08\", ATTR{authorized}=\"0\"" >/etc/udev/rules.d/60-ck-smoke-usb.rules; udevadm control --reload; udevadm trigger --subsystem-match=usb --action=add; udevadm settle; n=0; a=; for i in /sys/bus/usb/devices/*:*; do [ "$(cat $i/bInterfaceClass 2>/dev/null)" = 08 ] && n=$((n+1)) && a="$a$(cat $i/authorized)"; done; rm -f /etc/udev/rules.d/60-ck-smoke-usb.rules; echo CK59_usbstorage_${n}_${a}'
     'test -x /usr/bin/nm-applet && test -f /etc/xdg/autostart/nm-applet.desktop && grep -q systray /etc/xdg/xfce4/panel/default.xml && echo CK10_network_menu_ok'
     'id -nG contestant | tr " " "
 " | grep -xqE "sudo|adm|lpadmin|root" && echo CK11_bad_groups || echo CK11_groups_ok'
@@ -177,10 +228,11 @@ run_checks() {
     'echo CK29_kiosk_$(grep -c CustomizePanel=NONE /etc/xdg/xfce4/kiosk/kioskrc)_vt_$(grep -c DontVTSwitch /etc/X11/xorg.conf.d/50-ck-novtswitch.conf)'
     'echo CK30_desktop_$(ls /home/contestant/Desktop | wc -l)_exec_$(find /home/contestant/Desktop -name "*.desktop" -perm -u+x | wc -l)_owner_$(stat -c %U /home/contestant/Desktop/firefox.desktop)'
     'echo CK31_menu_$(grep -c "<Filename>" /etc/xdg/xdg-xubuntu/menus/xfce-applications.menu)_panel_$(pgrep -u contestant -c xfce4-panel)'
+    'cmp -s /etc/xdg/menus/xfce-applications.menu /etc/xdg/xdg-xubuntu/menus/xfce-applications.menu; echo CK60_menu_in_etc_xdg_$?'
     'runuser -u contestant -- systemctl start ck-refresh-connection.service >/dev/null 2>&1; echo CK32_refreshunit_$?'
     'runuser -u contestant -- systemctl --no-ask-password restart squid.service >/dev/null 2>&1; echo CK33_squidrestart_$?'
     'runuser -u contestant -- ck-refresh-connection --no-gui; echo CK34_refresh_$?'
-    'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK44_power_$(p org.freedesktop.login1.power-off)_reboot_$(p org.freedesktop.login1.reboot)_firmware_$(p org.freedesktop.login1.set-reboot)_suspend_$(p org.freedesktop.login1.suspend)'
+    'p() { pkcheck --action-id "$1" --process $(pgrep -u contestant -o -x xfce4-session) >/dev/null 2>&1; echo $?; }; echo CK44_power_$(p org.freedesktop.login1.power-off)_reboot_$(p org.freedesktop.login1.reboot)_firmware_$(p org.freedesktop.login1.set-reboot-to-firmware-setup)_suspend_$(p org.freedesktop.login1.suspend)'
     ${CK_SMOKE_EXTRA:+"$CK_SMOKE_EXTRA"}
     'echo CK18_java_store_$(keytool -list -cacerts -storepass changeit 2>/dev/null | grep -ci ck-squid-ca)'
     'journalctl -u ck-squid-ca -u squid -u ck-capture --no-pager | grep -v "squid\[" | tail -12'
@@ -238,7 +290,7 @@ run_checks() {
   expect 'CK50_resetlogin_1_0_0_1' 'the reset login is refused unless the organizer allowed it with ck-reset-allow, and only for two minutes'
   expect 'CK51_lockdown_1_integrity' 'the kernel runs with lockdown=integrity'
   expect 'CK52_rootnet_124_slices_4' 'a root shell outside the network slice has no network, and Squid, NetworkManager, the clock and the agent uplink are in that slice'
-  expect 'CK53_hardened_3_3_failed_0' 'ck-uplink and ck-config run with the native-only syscall architecture, no personality changes and no namespaces, and neither has failed'
+  expect 'CK53_hardened_3_3_3_failed_0' 'ck-uplink, ck-config and ck-recording-upload run with the native-only syscall architecture, no personality changes and no namespaces, and none has failed'
   expect 'CK54_mounts_1_1_0_1' '/tmp, /home and /var/tmp are mounted nosuid and nodev, and /tmp is not noexec'
   expect 'CK59_usbstorage_1_0' 'a USB mass-storage interface is switched off by the rule the agent writes for block_usb_storage'
   expect 'CK10_network_menu_ok' 'the network menu is installed, starts with the desktop and the panel has a notification area'
@@ -272,6 +324,7 @@ run_checks() {
   expect 'CK29_kiosk_1_vt_1' 'XFCE kiosk file and the no-text-console X setting are in place'
   expect 'CK30_desktop_5_exec_5_owner_contestant' 'the contestant has five executable launchers on the Desktop (four programs and Refresh Connection)'
   expect 'CK31_menu_4_panel_1' 'the application menu lists four programs and the panel is running'
+  expect 'CK60_menu_in_etc_xdg_0' 'the restricted menu is in /etc/xdg, which the xfce session of the contestant reads'
   expect 'CK32_refreshunit_0' 'the contestant can start the Refresh Connection unit without sudo (polkit rule)'
   expect 'CK33_squidrestart_1' 'the contestant still cannot restart Squid itself'
   expect 'CK34_refresh_0' 'Refresh Connection restarts Squid and every allowed site answers through it'
@@ -293,7 +346,92 @@ run_checks() {
   return "$failed"
 }
 
+# Layout of a --read-only-root image, seen from inside: the root is an overlay whose lower layer is the read-only
+# root partition and whose upper layer is memory, /var and /home come from the state partition, and a write to the
+# system is possible (so the programs that write to /etc and /usr still work) but is not on the disk.
+run_layout() {
+  exec 3<>"$fifo.in"
+  local cr=$'\r' cmd
+  printf 'root%s' "$cr" >&3
+  wait_for 'root@' 60 || {
+    echo "FAIL [layout]: no root shell on the serial console (image built without --debug-login?)" >&2
+    return 1
+  }
+  # shellcheck disable=SC2016
+  local -a cmds=(
+    'echo L1_root_$(findmnt -no FSTYPE /)_lower_$(findmnt -no OPTIONS /media/ck-ro | cut -d, -f1)_$(findmnt -no LABEL /media/ck-ro 2>/dev/null || lsblk -no LABEL $(findmnt -no SOURCE /media/ck-ro))'
+    'echo L2_memory_$(findmnt -no FSTYPE /media/ck-rw)_state_$(findmnt -no FSTYPE,OPTIONS /state | cut -d, -f1 | tr " " _)'
+    'echo L3_var_$(findmnt -no LABEL,FSROOT /var | tr " " :)_home_$(findmnt -no LABEL,FSROOT /home | tr " " :)'
+    'touch /usr/ck-layout-probe && echo L4_write_ok_$(test -e /media/ck-ro/usr/ck-layout-probe && echo ON_DISK || echo not_on_disk)'
+    'echo L5_state_$(df --output=size -B1M /state | tail -1 | tr -d " ")_mb_fstab_root_$(grep -c " / " /etc/fstab)'
+    # What a failed run needs to be understood: the kernel command line, what the initramfs holds, what the kernel said.
+    'cat /proc/cmdline; lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "ck-|overlay|verity"; dmesg | grep -iE "overlay|verity|ck-" | tail -8; findmnt -rno TARGET,FSTYPE,SOURCE / /media/ck-ro'
+    'echo L_$((1+1))_DONE'
+  )
+  if [[ $mode == verity || $mode == signed ]]; then
+    # The root partition is a dm-verity device with the hash tree on CKVERITY, and the kernel was given the root hash.
+    # shellcheck disable=SC2016
+    cmds=(
+      'echo L6_verity_$(veritysetup status ckroot | awk "\$1==\"type:\" {print \$2}")_$(veritysetup status ckroot | awk "\$1==\"status:\" {print \$2}")_source_$(findmnt -no SOURCE /media/ck-ro)'
+      'echo L7_hashdev_$(lsblk -no PARTLABEL $(veritysetup status ckroot | awk "/hash device:/ {print \$3}"))_hashlen_$(grep -o "ck.roothash=[0-9a-f]*" /proc/cmdline | cut -d= -f2 | tr -d "[:space:]" | wc -c)'
+      "${cmds[@]}"
+    )
+  fi
+  for cmd in "${cmds[@]}"; do printf '%s%s' "$cmd" "$cr" >&3; done
+  wait_for 'L_2_DONE' 120 || {
+    echo "FAIL [layout]: the guest did not finish the checks" >&2
+    return 1
+  }
+  local failed=0
+  expect() { # expect MARKER DESCRIPTION
+    if grep -q "$1" "$log"; then echo "ok   $2"; else
+      echo "FAIL $2 (wanted $1)" >&2
+      failed=1
+    fi
+  }
+  expect 'L1_root_overlay_lower_ro_CKROOT' 'the root is an overlay over the CKROOT partition, mounted read-only'
+  expect 'L2_memory_tmpfs_state_ext4' 'the memory layer is a tmpfs and CKSTATE is ext4'
+  expect 'L3_var_CKSTATE:/var_home_CKSTATE:/home' '/var and /home come from the state partition'
+  expect 'L4_write_ok_not_on_disk' 'a write to the system works and does not reach the root partition'
+  expect 'L5_state_[0-9]*_mb_fstab_root_0' 'the state partition has room and fstab has no line for /'
+  if [[ $mode == verity || $mode == signed ]]; then
+    expect 'L6_verity_VERITY_verified_source_/dev/mapper/ckroot' 'the root is a dm-verity device whose blocks verified'
+    expect 'L7_hashdev_CKVERITY_hashlen_64' 'the hash tree is on the CKVERITY partition and the kernel command line carries a 64 character root hash'
+  fi
+  return "$failed"
+}
+
+started=$SECONDS
+died=0
 for _ in $(seq 1 "$timeout_s"); do
+  # These two must never reach a login prompt; the loop below waits the whole time to be sure.
+  # The initramfs shell (panic() without panic=) would be a root shell on a failed check: never acceptable.
+  if [[ $mode == refused || $mode == tamper || $mode == verity || $mode == signed ]] && grep -qF '(initramfs)' "$log"; then
+    echo "FAIL [$mode]: the initramfs opened a shell (the kernel command line has no panic= policy); last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
+  if [[ $mode == refused || $mode == tamper ]] && grep -q 'login:' "$log"; then
+    echo "FAIL [$mode]: the login prompt was reached, but this boot must be refused" >&2
+    exit 1
+  fi
+  if [[ $mode == layout || $mode == verity || $mode == signed ]] && grep -q 'login:' "$log"; then
+    rc=0
+    run_layout || rc=1
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    if [[ $rc -eq 0 ]]; then
+      if [[ $mode == signed ]] && ! grep -qi 'secure boot enabled' "$log"; then
+        echo "FAIL [signed]: the checks passed but the kernel did not report Secure Boot enabled" >&2
+        exit 1
+      fi
+      echo "PASS [$mode, $accel]"
+      exit 0
+    fi
+    echo "FAIL [$mode, $accel]; last console lines:" >&2
+    tail -40 "$log" >&2
+    exit 1
+  fi
   if [[ $mode == checks ]] && grep -q 'login:' "$log"; then
     rc=0
     run_checks || rc=1
@@ -317,10 +455,36 @@ for _ in $(seq 1 "$timeout_s"); do
     echo "PASS [$mode, $accel]: login prompt reached"
     exit 0
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then break; fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    # QEMU stopping by itself well before its time is up is a failure, also for a boot that must be refused.
+    [[ $mode == refused ]] && ((SECONDS - started < timeout_s - 5)) && died=1
+    break
+  fi
   sleep 1
 done
 kill "$pid" 2>/dev/null || true
+if [[ $mode == refused || $mode == tamper ]]; then
+  if [[ $died -eq 1 ]]; then
+    echo "FAIL [$mode]: QEMU stopped by itself; last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
+  # shim refuses the image before the kernel starts, so nothing of the kernel may be in the log.
+  if [[ $mode == refused ]] && grep -q 'Linux version' "$log"; then
+    echo "FAIL [refused]: the kernel started, so the signed image was not refused; last console lines:" >&2
+    tail -20 "$log" >&2
+    exit 1
+  fi
+  # No login in the whole time is the wanted result. A tampered root must also say why (verity or the failed mount),
+  # or the test would pass on a machine that never started.
+  if [[ $mode == tamper ]] && ! grep -qiE 'data block [0-9]+ is corrupted|verity.*corrupt|Attempted to kill init|I/O error' "$log"; then
+    echo "FAIL [tamper]: no login, but the log does not show the verity failure; last console lines:" >&2
+    tail -30 "$log" >&2
+    exit 1
+  fi
+  echo "PASS [$mode, $accel]: no login prompt within ${timeout_s}s, as wanted"
+  exit 0
+fi
 echo "FAIL [$mode, $accel]: no login prompt within ${timeout_s}s; last console lines:" >&2
 tail -20 "$log" >&2
 exit 1

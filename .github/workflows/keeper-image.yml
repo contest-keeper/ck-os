@@ -3,7 +3,8 @@ name: Keeper OS image
 on:
   push:
     branches: [develop]
-    paths: ['.github/workflows/keeper-image.yml']
+    # Every deploy of develop publishes new images; a change to docs alone does not need one.
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_call:
     inputs:
       tag:
@@ -20,20 +21,27 @@ defaults:
   run:
     shell: bash
 
+# One run at a time: all jobs update the same image index, which a second writer must not overwrite.
+concurrency:
+  group: keeper-os-image-${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
+  cancel-in-progress: false
+
 jobs:
   image:
+    name: image (${{ matrix.profile }})
     if: >-
       (github.ref == 'refs/heads/develop' &&
         (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.tag != '')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [ubuntu, debian, mint]
     # Configure the existing environment approval and a separate blob-scoped OIDC publisher for
     # each target. Enable CK_IMAGE_PUBLISH_ENABLED in that environment once it is ready.
     environment: ${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
-    concurrency:
-      group: keeper-os-image-${{ github.ref == 'refs/heads/develop' && 'develop' || 'production' }}
-      cancel-in-progress: false
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
@@ -50,6 +58,8 @@ jobs:
             version="$version-dev.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
             printf '%s\n' "$version" > version.txt
           fi
+          # build-image names the files and the image after the profile, except for the default (ubuntu).
+          [[ "${{ matrix.profile }}" == ubuntu ]] || version="$version-${{ matrix.profile }}"
           echo "KEEPER_IMAGE_VERSION=$version" >> "$GITHUB_ENV"
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
@@ -74,26 +84,28 @@ jobs:
       - name: Install Linux image and VM tools
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd
-      - name: Cache pinned downloads
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+          sudo apt-get install --no-install-recommends -y dosfstools fdisk mmdebstrap ovmf qemu-system-x86 zstd debian-archive-keyring
+      # The packages and downloads of the build, kept between runs: the snapshot server is slow to the runners.
+      # build-image checks every download against its pinned hash or the signed package index, so a cached
+      # file cannot change an image.
+      - name: Set the download cache folder
+        run: echo "CK_CACHE=$RUNNER_TEMP/ck-os-build" >> "$GITHUB_ENV"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
-          path: ${{ runner.temp }}/ck-os-cache
-          key: ck-os-pinned-${{ hashFiles('tools/build-image') }}
-          restore-keys: ck-os-pinned-
+          path: ${{ runner.temp }}/ck-os-build
+          key: keeper-downloads-${{ matrix.profile }}-${{ hashFiles('tools/build-image', 'image/profiles/**') }}
+          restore-keys: keeper-downloads-${{ matrix.profile }}-
       - name: Build the distribution image
+        # When the image is built again below, this smoke build is thrown away, so it is not compressed
+        # (compressing takes about 12 of its 19 minutes). Without the second build it is the one verified.
         env:
-          PUBLISH_ENABLED: ${{ vars.CK_IMAGE_PUBLISH_ENABLED }}
+          SMOKE_COMPRESS: ${{ (vars.CK_IMAGE_PUBLISH_ENABLED == 'true' || inputs.tag != '') && '--no-compress' || '' }}
         run: |
-          mkdir -p "$RUNNER_TEMP/keeper-image" "$RUNNER_TEMP/ck-os-cache"
-          # Skip zstd -19 on the throwaway smoke image when a second build with real keys follows.
-          extra=()
-          if [[ "$PUBLISH_ENABLED" == true || -n "$RELEASE_TAG" ]]; then
-            extra+=(--no-compress)
-          fi
-          sudo CK_CACHE="$RUNNER_TEMP/ck-os-cache" tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+          mkdir -p "$RUNNER_TEMP/keeper-image"
+          # shellcheck disable=SC2086 # SMOKE_COMPRESS is empty or one flag
+          sudo --preserve-env=CK_CACHE tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys tools/ci-test-config-keys --serial-console "${extra[@]}"
+            --config-public-keys tools/ci-test-config-keys --serial-console $SMOKE_COMPRESS --profile "${{ matrix.profile }}"
       - name: Boot UEFI, Secure Boot and BIOS in QEMU
         run: sudo tools/qemu-smoke "$RUNNER_TEMP/keeper-image/keeper-os-$KEEPER_IMAGE_VERSION.img" all 360
       # The smoke build above carries a CI test key, so it can never be published. A build that is
@@ -112,9 +124,15 @@ jobs:
             echo "::error::CK_CONFIG_PUBLIC_KEYS holds the CI test key"
             exit 1
           fi
-          sudo CK_CACHE="$RUNNER_TEMP/ck-os-cache" tools/build-image --out "$RUNNER_TEMP/keeper-image" \
+          sudo --preserve-env=CK_CACHE tools/build-image --out "$RUNNER_TEMP/keeper-image" \
             --agent "$PWD/target/x86_64-unknown-linux-musl/release/ck-agent" \
-            --config-public-keys "$RUNNER_TEMP/config-public-keys"
+            --config-public-keys "$RUNNER_TEMP/config-public-keys" --profile "${{ matrix.profile }}"
+      # The cache is saved by the runner user, which cannot read apt's root-only download folders.
+      - name: Make the download cache readable for saving
+        if: success()
+        run: |
+          sudo rm -rf "$CK_CACHE"/apt-*/partial "$CK_CACHE"/apt-*/lock
+          sudo chown -R "$USER" "$CK_CACHE"
       - name: Verify the packaged files and stage the Hub manifest
         run: |
           python3 tools/publish-image "$RUNNER_TEMP/keeper-image" "$KEEPER_IMAGE_VERSION" \
