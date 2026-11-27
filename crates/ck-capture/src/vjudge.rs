@@ -57,9 +57,10 @@ impl Vjudge {
             .into_iter()
             .partition(|waiting| now.saturating_duration_since(waiting.since) >= HOLD);
         self.awaiting = fresh;
+        // Nothing says whose run it is, and the last user may be another person's: no name.
         stale
             .iter()
-            .map(|waiting| event(waiting, self.user.as_deref(), None))
+            .map(|waiting| event(waiting, None, None))
             .collect()
     }
 }
@@ -164,22 +165,23 @@ impl Rule for Vjudge {
                     run_id: 0,
                     since: Instant::now(),
                 };
-                let mut refused = event(&waiting, self.user.as_deref(), None);
+                let mut refused = event(&waiting, None, None);
                 if let Output::Event { payload, .. } = &mut refused {
                     payload["accepted"] = json!(false);
                     payload["submission_id"] = Value::Null;
                 }
                 return vec![refused];
             };
-            if self.awaiting.len() >= MAX_WAITING {
-                self.awaiting.remove(0);
-            }
+            // The oldest is told without author or time rather than lost.
+            let evicted = (self.awaiting.len() >= MAX_WAITING)
+                .then(|| self.awaiting.remove(0))
+                .map(|waiting| event(&waiting, None, None));
             self.awaiting.push(Awaiting {
                 sent,
                 run_id,
                 since: Instant::now(),
             });
-            return Vec::new();
+            return evicted.into_iter().collect();
         }
         let Some(run_id) = solution_run(request.path()) else {
             return Vec::new();
@@ -187,6 +189,10 @@ impl Rule for Vjudge {
         let Some(at) = self.awaiting.iter().position(|w| w.run_id == run_id) else {
             return Vec::new();
         };
+        // An error page or an empty answer names nothing: keep waiting for the next poll or the hold.
+        if answer.get("runId").and_then(Value::as_u64) != Some(run_id) {
+            return Vec::new();
+        }
         let author = answer
             .get("author")
             .and_then(Value::as_str)
@@ -204,11 +210,7 @@ impl Rule for Vjudge {
                 payload: json!({ "platform": "vjudge", "username": name }),
             });
         }
-        outputs.push(event(
-            &waiting,
-            author.as_deref().or(self.user.as_deref()),
-            judge_time_ms,
-        ));
+        outputs.push(event(&waiting, author.as_deref(), judge_time_ms));
         outputs
     }
 }
@@ -323,6 +325,52 @@ mod tests {
             NO_EVENTS,
             "only once"
         );
+    }
+
+    #[test]
+    fn an_unusable_answer_keeps_the_run_waiting_and_the_last_user_is_never_its_author() {
+        let mut rule = Vjudge::new();
+        let (post, head) = submit("/contest/submit/871412/C", "x");
+        let _ = rule.on_request(&post);
+        let _ = rule.on_response(&head, &json_answer(200, r#"{"runId":9}"#));
+        // A 503 with no body names nothing: the run stays, and a later good poll tells it.
+        assert_eq!(
+            events(rule.on_response(&solution(9), &json_answer(503, ""))),
+            NO_EVENTS
+        );
+        let told = events(rule.on_response(
+            &solution(9),
+            &json_answer(
+                200,
+                r#"{"author":"ana","submitTime":1795789024000,"runId":9}"#,
+            ),
+        ));
+        assert_eq!(told.len(), 2, "a login and the submission");
+        // Another person's run whose page never comes is told with no name, though `ana` is known.
+        let (post, head) = submit("/contest/submit/871412/D", "y");
+        let _ = rule.on_request(&post);
+        let _ = rule.on_response(&head, &json_answer(200, r#"{"runId":10}"#));
+        let told = events(rule.flush_stale(Instant::now() + HOLD));
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["username"], Value::Null);
+        assert_eq!(told[0]["submission_id"], 10);
+    }
+
+    #[test]
+    fn the_oldest_waiting_run_is_told_not_lost_when_too_many_wait() {
+        let mut rule = Vjudge::new();
+        let mut told = Vec::new();
+        for run in 1..=(MAX_WAITING as u64 + 1) {
+            let (post, head) = submit("/contest/submit/871412/C", "x");
+            let _ = rule.on_request(&post);
+            told.extend(events(rule.on_response(
+                &head,
+                &json_answer(200, &format!(r#"{{"runId":{run}}}"#)),
+            )));
+        }
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["submission_id"], 1);
+        assert_eq!(told[0]["username"], Value::Null);
     }
 
     #[test]
