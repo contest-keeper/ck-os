@@ -13,6 +13,10 @@ The snapshot archive has the corresponding source for its packages:
 Add the same release, updates and security suites as deb-src entries and use
 apt-get source <package>=<version> to retrieve the source for a specific package.
 
+The firmware-* packages come from the non-free-firmware section. They are
+redistributed unmodified under their vendors' licences (see each package's
+copyright file), and source code is not provided for all of them.
+
 The pinned downloads are recorded in tools/build-image:
 
   VSCodium @CODIUM_VERSION@ (MIT), https://github.com/VSCodium/vscodium
