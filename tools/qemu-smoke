@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Boot a built image in QEMU and wait for the login prompt on the serial console.
 # Usage: tools/qemu-smoke IMAGE [MODE] [timeout-seconds]
-#   MODE: uefi | secureboot | bios | all (default all) | checks. "all" runs the three boot modes one after another
-#   and exits non-zero if any of them fails.
+#   MODE: uefi | secureboot | bios | all (default all) | checks. "all" runs the three boot modes at once (one after
+#   another when CK_SMOKE_LOG is set) and exits non-zero if any of them fails.
 #   MODE layout | verity: for an image built with --read-only-root (layout) or --verity (verity, UEFI only). Boots UEFI, logs in as root and checks the memory layer over the
 #   read-only root and the state partition. Needs --debug-login.
 #   MODE signed | refused | tamper: for an image built with --verity and --uki-key (CK_UKI_CERT is its certificate, PEM).
@@ -28,8 +28,28 @@ timeout_s=${3:-240}
 
 if [[ $mode == all ]]; then
   failed=0
-  for m in uefi secureboot bios; do
-    "$0" "$image" "$m" "$timeout_s" || failed=1
+  if [[ -n ${CK_SMOKE_LOG:-} ]]; then
+    for m in uefi secureboot bios; do
+      "$0" "$image" "$m" "$timeout_s" || failed=1
+    done
+    exit "$failed"
+  fi
+  # Each mode uses snapshot=on and its own temporary files, so all three boot in parallel.
+  # Every temporary file of a mode is made in here, so one stopped before its own trap is set leaves nothing behind.
+  # /var/tmp is where QEMU puts its snapshot files too; Git Bash on Windows may not have it.
+  smoke_dir=$(mktemp -d -p "${TMPDIR:-/var/tmp}" 2>/dev/null || mktemp -d)
+  # On a signal each child stops its own QEMU from its own trap; wait for that before leaving.
+  trap 'kill $(jobs -p) 2>/dev/null || true; wait; rm -rf "$smoke_dir"' EXIT
+  pids=()
+  modes=(uefi secureboot bios)
+  for m in "${modes[@]}"; do
+    TMPDIR=$smoke_dir "$0" "$image" "$m" "$timeout_s" >"$smoke_dir/$m.log" 2>&1 &
+    pids+=($!)
+  done
+  for i in "${!modes[@]}"; do
+    m=${modes[$i]}
+    if ! wait "${pids[$i]}"; then failed=1; fi
+    cat "$smoke_dir/$m.log"
   done
   exit "$failed"
 fi
@@ -50,7 +70,8 @@ vars=$(mktemp)
 usbdisk=$(mktemp)
 # CK_SMOKE_LOG=FILE keeps the whole serial log there, for looking at a failed run. CK_SMOKE_EXTRA='cmd' runs one more
 # command in the guest (checks mode), for looking into a failure.
-trap '[[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"; kill $(jobs -p) 2>/dev/null || true' EXIT
+# QEMU is waited for, so none is still running when this script returns; timeout -k below bounds that wait.
+trap 'kill $(jobs -p) 2>/dev/null || true; wait; [[ -n ${CK_SMOKE_LOG:-} ]] && cp "$log" "$CK_SMOKE_LOG"; rm -f "$log" "$vars" "$usbdisk" "${tampered:-}" "$fifo.in" "$fifo.out"' EXIT
 
 # The tamper mode boots a copy whose first root block is overwritten, so verity must refuse it. The copy is sparse.
 tampered=
@@ -135,7 +156,7 @@ case $mode in
     ;;
 esac
 
-timeout "$timeout_s" "$qemu" "${args[@]}" "${serial[@]}" &
+timeout -k 10 "$timeout_s" "$qemu" "${args[@]}" "${serial[@]}" &
 pid=$!
 
 # Waits up to $2 seconds for the text $1 in the serial log; returns 1 if it never comes.

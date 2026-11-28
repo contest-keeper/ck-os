@@ -18,8 +18,9 @@ configure_debian_profile() {
     "deb $MIRROR $SUITE-updates main non-free-firmware"
     "deb $security_mirror $SUITE-security main non-free-firmware"
   )
+  APT_KEYRING=${CK_DEBIAN_KEYRING:-/usr/share/keyrings/debian-archive-keyring.gpg}
   APT_PROFILE_OPTIONS=(
-    "--keyring=${CK_DEBIAN_KEYRING:-/usr/share/keyrings/debian-archive-keyring.gpg}"
+    "--keyring=$APT_KEYRING"
     "--aptopt=Acquire::Check-Valid-Until \"false\""
   )
 }
