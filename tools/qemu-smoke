@@ -35,13 +35,15 @@ if [[ $mode == all ]]; then
     exit "$failed"
   fi
   # Each mode uses snapshot=on and its own temporary files, so all three boot in parallel.
-  smoke_dir=$(mktemp -d)
+  # Every temporary file of a mode is made in here, so one stopped before its own trap is set leaves nothing behind.
+  # /var/tmp is where QEMU puts its snapshot files too; Git Bash on Windows may not have it.
+  smoke_dir=$(mktemp -d -p "${TMPDIR:-/var/tmp}" 2>/dev/null || mktemp -d)
   # On a signal each child stops its own QEMU from its own trap; wait for that before leaving.
   trap 'kill $(jobs -p) 2>/dev/null || true; wait; rm -rf "$smoke_dir"' EXIT
   pids=()
   modes=(uefi secureboot bios)
   for m in "${modes[@]}"; do
-    "$0" "$image" "$m" "$timeout_s" >"$smoke_dir/$m.log" 2>&1 &
+    TMPDIR=$smoke_dir "$0" "$image" "$m" "$timeout_s" >"$smoke_dir/$m.log" 2>&1 &
     pids+=($!)
   done
   for i in "${!modes[@]}"; do
