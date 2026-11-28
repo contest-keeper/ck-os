@@ -53,14 +53,24 @@ class AptCacheTests(unittest.TestCase):
             self.assertEqual(verify(dest, f"deb [trusted=yes] file:{repo} ./").returncode, 0)
             self.assertEqual(sorted(os.listdir(dest)), ["epoch_2%3a1.0_amd64.deb", "good_1.0_amd64.deb"])
             self.assertEqual(sorted(os.listdir(cache)), before)
-            # No index, or a copy that breaks half way: no folder to import, and nothing unchecked left behind.
+            # apt-helper fails on the first index only and reads the next one.
+            stub_first_index = (
+                'n=0; function /usr/lib/apt/apt-helper { n=$((n + 1)); ((n > 1)) || return 1; cat "$2"; };'
+            )
+            # A second repository, so that one index is read well and the other is not.
+            other = Path(temp, "other")
+            other.mkdir()
+            (other / "Packages").write_text(index.replace("Package: ", "Package: other-"))
+            # No index, an index that cannot be read, or a copy that breaks half way: no folder to import, and nothing
+            # unchecked left behind.
             for source, stub in (
                 (f"deb [trusted=yes] file:{repo}/missing ./", ""),
                 (f"deb [trusted=yes] file:{repo} ./", 'cp() { echo half >"${@: -1}"; return 1; };'),
+                (f"deb [trusted=yes] file:{repo} ./\ndeb [trusted=yes] file:{other} ./", stub_first_index),
             ):
                 failed = verify(Path(temp, "failed"), source, stub)
                 self.assertNotEqual(failed.returncode, 0)
-                self.assertEqual(sorted(os.listdir(temp)), ["cache", "dest", "repo", "scratch"])
+                self.assertEqual(sorted(os.listdir(temp)), ["cache", "dest", "other", "repo", "scratch"])
                 self.assertEqual(os.listdir(scratch), [])
 
 

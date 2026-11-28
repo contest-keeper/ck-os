@@ -12,6 +12,7 @@
 verify_apt_cache() (
   cache=${1:?} dest=${2:?} keyring=$3 kept=0 skipped=0
   shift 3
+  set -o pipefail
   shopt -s nullglob
   entries=("$cache"/*.deb)
   stage=$dest.unchecked
@@ -42,10 +43,10 @@ verify_apt_cache() (
   # One "SHA256  file name" line per package, with the name apt gives the file in its archive folder.
   # shellcheck disable=SC2016 # $(FILENAME) is apt's own placeholder
   "${apt[@]}" indextargets --format '$(FILENAME)' 'Identifier: Packages' |
-    while IFS= read -r list; do /usr/lib/apt/apt-helper cat-file "$list"; done |
+    while IFS= read -r list; do /usr/lib/apt/apt-helper cat-file "$list" || exit 1; done |
     awk '$1 == "Package:" { p = $2 } $1 == "Version:" { v = $2; gsub(":", "%3a", v) } $1 == "Architecture:" { a = $2 }
       $1 == "SHA256:" { s = $2 } /^$/ { if (s != "") print s "  " p "_" v "_" a ".deb"; s = "" }
-      END { if (s != "") print s "  " p "_" v "_" a ".deb" }' >"$dir/good"
+      END { if (s != "") print s "  " p "_" v "_" a ".deb" }' >"$dir/good" || exit 1
   [[ -s $dir/good ]] || {
     echo "ERROR: the package index lists no files, so the apt cache cannot be checked" >&2
     exit 1
