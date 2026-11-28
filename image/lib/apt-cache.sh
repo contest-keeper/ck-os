@@ -2,22 +2,27 @@
 # apt trusts a .deb that is already in its archive folder by name and size and does not hash it again, so the files
 # tools/build-image keeps between builds are checked here before apt sees them.
 
-# verify_apt_cache CACHE DEST KEYRING SOURCE...: copies into the new folder DEST the files of CACHE whose name and
-# SHA-256 are in a signed package index of the sources. CACHE is only read, so another build may share it, and each
-# copy is what gets hashed. KEYRING is a file or a folder; empty means the build machine's own apt keys. A keyring
-# also switches off the expiry date check, as the Debian build does for its dated snapshot.
-# It fails, with DEST left empty, when the indexes cannot be had; the build then goes on without the cache. A caller
-# that handles the failure switches errexit off in here, so each step that must stop the function says so itself.
-# The body is a subshell, so its trap removes the downloaded indexes however it ends.
+# verify_apt_cache CACHE DEST KEYRING SOURCE...: makes the new folder DEST with copies of the files of CACHE whose
+# name and SHA-256 are in a signed package index of the sources. CACHE is only read, so another build may share it,
+# and each copy is what gets hashed. KEYRING is a file or a folder; empty means the build machine's own apt keys. A
+# keyring also switches off the expiry date check, as the Debian build does for its dated snapshot.
+# The copies are checked in DEST.unchecked, which becomes DEST only when every one is done: after a failure there is
+# no DEST. A caller that handles the failure switches errexit off in here, so each step that must stop the function
+# says so itself. The body is a subshell, so its trap removes the indexes and the unchecked files however it ends.
 verify_apt_cache() (
   cache=${1:?} dest=${2:?} keyring=$3 kept=0 skipped=0
   shift 3
-  mkdir "$dest" || exit 1
   shopt -s nullglob
   entries=("$cache"/*.deb)
-  ((${#entries[@]})) || exit 0
+  stage=$dest.unchecked
+  dir=
+  mkdir "$stage" || exit 1
+  trap 'rm -rf "$stage" ${dir:+"$dir"}' EXIT
+  if ((${#entries[@]} == 0)); then
+    mv -T -- "$stage" "$dest"
+    exit
+  fi
   dir=$(mktemp -d) || exit 1
-  trap 'rm -rf "$dir"' EXIT
   chmod 0755 "$dir" # apt downloads as the user _apt
   mkdir -p "$dir/lists/partial" "$dir/archives/partial" "$dir/none"
   : >"$dir/status"
@@ -48,15 +53,16 @@ verify_apt_cache() (
   for entry in "${entries[@]}"; do
     name=${entry##*/}
     if [[ -f $entry && ! -L $entry ]]; then
-      cp -- "$entry" "$dest/$name"
-      sum=$(sha256sum <"$dest/$name")
+      cp -- "$entry" "$stage/$name" || exit 1
+      sum=$(sha256sum <"$stage/$name")
       if grep -qxF "${sum%% *}  $name" "$dir/good"; then
         kept=$((kept + 1))
         continue
       fi
-      rm -- "$dest/$name"
+      rm -- "$stage/$name" || exit 1
     fi
     skipped=$((skipped + 1))
   done
+  mv -T -- "$stage" "$dest" || exit 1
   echo "== apt cache: $kept files match the signed index, $skipped skipped"
 )

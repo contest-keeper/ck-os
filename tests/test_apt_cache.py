@@ -41,9 +41,10 @@ class AptCacheTests(unittest.TestCase):
             scratch.mkdir()
             scratch.chmod(0o755)
 
-            def verify(dest, source):
+            def verify(dest, source, stub=""):
                 return subprocess.run(
-                    ["bash", "-euo", "pipefail", "-c", 'source "$1"; verify_apt_cache "$2" "$3" "" "$4"', "bash",
+                    ["bash", "-euo", "pipefail", "-c", f'source "$1"; {stub} verify_apt_cache "$2" "$3" "" "$4" || exit 1',
+                     "bash",
                      str(LIBRARY), str(cache), str(dest), source],
                     env={**os.environ, "TMPDIR": str(scratch)},
                 )
@@ -52,11 +53,15 @@ class AptCacheTests(unittest.TestCase):
             self.assertEqual(verify(dest, f"deb [trusted=yes] file:{repo} ./").returncode, 0)
             self.assertEqual(sorted(os.listdir(dest)), ["epoch_2%3a1.0_amd64.deb", "good_1.0_amd64.deb"])
             self.assertEqual(sorted(os.listdir(cache)), before)
-            empty = Path(temp, "empty")
-            failed = verify(empty, f"deb [trusted=yes] file:{repo}/missing ./")
-            self.assertNotEqual(failed.returncode, 0)
-            self.assertEqual(os.listdir(empty), [])
-            self.assertEqual(os.listdir(scratch), [])
+            # No index, or a copy that breaks half way: no folder to import, and nothing unchecked left behind.
+            for source, stub in (
+                (f"deb [trusted=yes] file:{repo}/missing ./", ""),
+                (f"deb [trusted=yes] file:{repo} ./", 'cp() { echo half >"${@: -1}"; return 1; };'),
+            ):
+                failed = verify(Path(temp, "failed"), source, stub)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(sorted(os.listdir(temp)), ["cache", "dest", "repo", "scratch"])
+                self.assertEqual(os.listdir(scratch), [])
 
 
 if __name__ == "__main__":
