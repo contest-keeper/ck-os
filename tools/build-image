@@ -302,7 +302,8 @@ fi
 mount "${LOOP}p2" "$MNT/boot/efi"
 # apt gets a private copy of the cached files that pass the check, never the kept folder itself.
 # shortcut: the copy takes as much room as the cache under /tmp; move it next to $OUT if a build machine runs out.
-verify_apt_cache "$APT_CACHE" "$WORK/apt-verified" "$APT_KEYRING" "${APT_SOURCES[@]}"
+verify_apt_cache "$APT_CACHE" "$WORK/apt-verified" "$APT_KEYRING" "${APT_SOURCES[@]}" ||
+  echo "WARNING: the apt cache could not be checked, so this build downloads its packages again" >&2
 # The fresh ext4 holds lost+found, so mmdebstrap's empty-target check is skipped.
 # Three suites: release, updates and security, all from the same snapshot time. The snapshot server sometimes
 # answers 503 for a while, so apt retries each download. The 60 second timeouts matter as much: a download that

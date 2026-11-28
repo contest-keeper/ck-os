@@ -6,15 +6,17 @@
 # SHA-256 are in a signed package index of the sources. CACHE is only read, so another build may share it, and each
 # copy is what gets hashed. KEYRING is a file or a folder; empty means the build machine's own apt keys. A keyring
 # also switches off the expiry date check, as the Debian build does for its dated snapshot.
+# It fails, with DEST left empty, when the indexes cannot be had; the build then goes on without the cache. A caller
+# that handles the failure switches errexit off in here, so each step that must stop the function says so itself.
 # The body is a subshell, so its trap removes the downloaded indexes however it ends.
 verify_apt_cache() (
   cache=${1:?} dest=${2:?} keyring=$3 kept=0 skipped=0
   shift 3
-  mkdir "$dest"
+  mkdir "$dest" || exit 1
   shopt -s nullglob
   entries=("$cache"/*.deb)
   ((${#entries[@]})) || exit 0
-  dir=$(mktemp -d)
+  dir=$(mktemp -d) || exit 1
   trap 'rm -rf "$dir"' EXIT
   chmod 0755 "$dir" # apt downloads as the user _apt
   mkdir -p "$dir/lists/partial" "$dir/archives/partial" "$dir/none"

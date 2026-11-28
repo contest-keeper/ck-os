@@ -52,8 +52,10 @@ class AptCacheTests(unittest.TestCase):
             self.assertEqual(verify(dest, f"deb [trusted=yes] file:{repo} ./").returncode, 0)
             self.assertEqual(sorted(os.listdir(dest)), ["epoch_2%3a1.0_amd64.deb", "good_1.0_amd64.deb"])
             self.assertEqual(sorted(os.listdir(cache)), before)
-            failed = verify(Path(temp, "none"), f"deb [trusted=yes] file:{repo}/missing ./")
+            empty = Path(temp, "empty")
+            failed = verify(empty, f"deb [trusted=yes] file:{repo}/missing ./")
             self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(os.listdir(empty), [])
             self.assertEqual(os.listdir(scratch), [])
 
 
